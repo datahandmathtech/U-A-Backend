@@ -38,6 +38,8 @@ import closureRoutes from './routes/closureRoutes';
 import liveFeedRoutes from './routes/liveFeedRoutes';
 import uploadRoutes from './routes/uploadRoutes';
 import drawingRoutes from './routes/drawingRoutes';
+import slabRoutes from './routes/slabRoutes';
+import vendorRoutes from './routes/vendorRoutes';
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -58,11 +60,13 @@ app.use('/api/qa', qaRoutes);
 app.use('/api/labor', laborRoutes);
 app.use('/api/machine-logs', machineLogRoutes);
 app.use('/api/expenses', expenseRoutes);
+app.use('/api/slabs', slabRoutes);
 app.use('/api/electricity', electricityRoutes);
 app.use('/api/closure', closureRoutes);
 app.use('/api/live-feed', liveFeedRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/drawings', drawingRoutes);
+app.use('/api/vendors', vendorRoutes);
 
 // Basic Route
 app.get('/api/health', async (req, res) => {
@@ -90,7 +94,11 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
+import { initCronJobs } from './utils/cronJobs';
+
 // Start Server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
+  initCronJobs();
+  console.log('Cron jobs initialized');
 });

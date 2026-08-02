@@ -3,12 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
-const machineLogHelper_1 = require("../utils/machineLogHelper");
 const router = (0, express_1.Router)();
 // Get Machine Logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const logs = await index_1.prisma.machineLog.findMany({
             orderBy: { createdAt: 'desc' },
             include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
@@ -23,7 +21,6 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
 // Live Feed Endpoint
 router.get('/live-feed', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const activeLogs = await index_1.prisma.machineLog.findMany({
             where: { status: 'active' },
             orderBy: { startTime: 'desc' },
@@ -65,12 +62,13 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-In (One-Step workflow for worker)
 router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName } = req.body;
+        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours } = req.body;
         const operatorId = req.user?.id;
         const newLog = await index_1.prisma.machineLog.create({
             data: {
                 machineId,
                 startTime: new Date(),
+                estimatedHours: estimatedHours ? Number(estimatedHours) : null,
                 machinePhotoUrl,
                 unitPhotoUrl,
                 softwarePhotoUrl,
@@ -80,7 +78,7 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
                 productId,
                 productName,
                 status: 'active',
-                approvalStatus: 'pending'
+                approvalStatus: 'in_progress'
             }
         });
         res.status(201).json(newLog);
@@ -93,7 +91,6 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
 // Get ALL Machine Logs for Today
 router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
         const dailyLogs = await index_1.prisma.machineLog.findMany({
@@ -120,7 +117,6 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
         let log = await index_1.prisma.machineLog.findFirst({
             where: { id: logId, status: 'active' }
@@ -145,16 +141,36 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
             data: {
                 endTime: endTime,
                 status: 'completed',
+                approvalStatus: 'pending',
                 remarks: remarks ? `${log.remarks || ''}\nOut: ${remarks}`.trim() : log.remarks,
                 endMachinePhotoUrl,
                 endUnitPhotoUrl,
                 endSoftwarePhotoUrl,
-                quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0
+                quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1
             }
         });
         await index_1.prisma.machine.update({
             where: { id: log.machineId },
             data: { totalRunHours: { increment: hours } }
+        });
+        // Also create a production log so it goes to the Admin Approvals tab
+        await index_1.prisma.productionLog.create({
+            data: {
+                projectId: log.projectId,
+                machineId: log.machineId,
+                stage: 'Production Work',
+                quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1,
+                transactionType: 'IN',
+                startPhotos: {
+                    machine: endMachinePhotoUrl,
+                    unit: endUnitPhotoUrl,
+                    software: endSoftwarePhotoUrl
+                },
+                workerId: log.operatorId,
+                parentLogId: log.id,
+                approvalStatus: 'pending',
+                status: 'completed'
+            }
         });
         res.json(updatedLog);
     }
@@ -195,12 +211,15 @@ router.put('/reject/:id', authMiddleware_1.authenticate, async (req, res) => {
 // Admin: Edit Log
 router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { quantityProduced, remarks } = req.body;
+        const { quantityProduced, remarks, projectId, productId, productName } = req.body;
         const updated = await index_1.prisma.machineLog.update({
             where: { id: req.params.id },
             data: {
                 quantityProduced: quantityProduced ? Number(quantityProduced) : undefined,
-                remarks: remarks !== undefined ? String(remarks) : undefined
+                remarks: remarks !== undefined ? String(remarks) : undefined,
+                projectId: projectId ? String(projectId) : undefined,
+                productId: productId ? String(productId) : undefined,
+                productName: productName ? String(productName) : undefined
             }
         });
         res.json(updated);

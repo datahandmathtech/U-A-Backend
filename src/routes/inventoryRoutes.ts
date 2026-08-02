@@ -4,13 +4,45 @@ import { authenticate } from '../middlewares/authMiddleware';
 
 const router = Router();
 
-// Get inventory items
+// Get inventory items with monthly stats
 router.get('/', authenticate, async (req, res) => {
   try {
     const inventory = await prisma.inventory.findMany({
       orderBy: { createdAt: 'desc' }
     });
-    res.json(inventory);
+    
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const [balances, logs] = await Promise.all([
+      prisma.dailyStockBalance.findMany({
+        where: { date: { gte: startOfMonth } },
+        orderBy: { date: 'asc' }
+      }),
+      prisma.inventoryLog.findMany({
+        where: { createdAt: { gte: startOfMonth } }
+      })
+    ]);
+    
+    const enrichedInventory = inventory.map(item => {
+      // Find the earliest balance for this month as opening stock
+      const itemBalances = balances.filter(b => b.inventoryId === item.id);
+      const openingStock = itemBalances.length > 0 ? itemBalances[0]!.openingQty : item.quantity;
+      
+      const itemLogs = logs.filter(l => l.inventoryId === item.id);
+      const inQty = itemLogs.filter(l => l.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
+      const outQty = itemLogs.filter(l => l.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
+      
+      return {
+        ...item,
+        openingStock,
+        inCurrentMonth: inQty,
+        outCurrentMonth: outQty,
+        closingStock: item.quantity
+      };
+    });
+
+    res.json(enrichedInventory);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching inventory' });
   }
@@ -39,6 +71,18 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    // Create initial InventoryLog
+    if (Number(quantity) > 0) {
+      await prisma.inventoryLog.create({
+        data: {
+          inventoryId: newItem.id,
+          type: 'IN',
+          quantity: Number(quantity),
+          remarks: 'Initial stock addition'
+        }
+      });
+    }
+    
     res.status(201).json(newItem);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating inventory item' });
@@ -49,14 +93,25 @@ router.post('/', authenticate, async (req, res) => {
 router.patch('/:id/stock', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { quantityChange } = req.body; // positive for IN, negative for OUT
+    const { quantityChange, remarks } = req.body; // positive for IN, negative for OUT
     
     const item = await prisma.inventory.findUnique({ where: { id: String(id) } });
     if (!item) return res.status(404).json({ message: 'Item not found' });
     
+    // Update inventory quantity
     const updatedItem = await prisma.inventory.update({
       where: { id: String(id) },
       data: { quantity: item.quantity + Number(quantityChange) }
+    });
+    
+    // Create InventoryLog
+    await prisma.inventoryLog.create({
+      data: {
+        inventoryId: String(id),
+        type: Number(quantityChange) >= 0 ? 'IN' : 'OUT',
+        quantity: Math.abs(Number(quantityChange)),
+        remarks: remarks || 'Manual stock update'
+      }
     });
     
     res.json(updatedItem);

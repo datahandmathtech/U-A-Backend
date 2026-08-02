@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); prisma.piece.findMany().then(pieces => console.log(pieces.map(p => p.pieceNumber))).finally(() => prisma.$disconnect());

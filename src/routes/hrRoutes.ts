@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import bcrypt from 'bcryptjs';
 
 const router = Router();
 
@@ -195,6 +196,41 @@ router.get('/staff-salary', authenticate, async (req, res) => {
     res.json(staffData);
   } catch (error) { console.error(error);
     res.status(500).json({ message: 'Server error fetching staff salary' });
+  }
+});
+
+// Update staff
+router.put('/staff/:id', authenticate, async (req, res) => {
+  try {
+    const id = req.params.id as string;
+    const { name, staffId, role, department, password } = req.body;
+    
+    // Check if user exists
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ message: 'Staff member not found' });
+    }
+
+    const dataToUpdate: any = { 
+      name, 
+      staffId: staffId && staffId.trim() !== '' ? staffId : null, 
+      role, 
+      department 
+    };
+
+    if (password && password.trim() !== '') {
+      dataToUpdate.password = await bcrypt.hash(password, 10);
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: dataToUpdate
+    });
+
+    res.json({ message: 'Staff member updated successfully', user: { id: updatedUser.id, name: updatedUser.name } });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error updating staff' });
   }
 });
 

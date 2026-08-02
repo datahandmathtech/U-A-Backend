@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
 }
 
@@ -9,64 +9,65 @@ datasource db {
 }
 
 model User {
-  id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  staffId    String?  @unique
-  name       String
-  email      String   @unique
-  password   String
-  role       String   @default("employee")
-  department String?
-  status     String   @default("active")
-  wage       Float?   @default(0)
-  otRate     Float?   @default(0)
-  pieceRate  Float?   @default(0) // Rate per Sq.Ft.
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  projects       Project[] @relation("AssignedProjects")
-  leads          Lead[]    @relation("AssignedLeads")
+  id             String          @id @default(auto()) @map("_id") @db.ObjectId
+  staffId        String?         @unique
+  name           String
+  email          String          @unique
+  password       String
+  role           String          @default("employee")
+  department     String?
+  status         String          @default("active")
+  wage           Float?          @default(0)
+  otRate         Float?          @default(0)
+  pieceRate      Float?          @default(0) // Rate per Sq.Ft.
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  projects       Project[]       @relation("AssignedProjects")
+  leads          Lead[]          @relation("AssignedLeads")
   productionLogs ProductionLog[]
   attendances    Attendance[]
   payrolls       Payroll[]
   qaInspections  QA_QC[]
   machineLogs    MachineLog[]
   expenses       Expense[]
+  pieceLogs      PieceLog[]
 }
 
 model Project {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId   String   @unique
-  clientId    String?  @db.ObjectId
-  
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  projectId String  @unique
+  clientId  String? @db.ObjectId
+
   // Enquiry specific fields
-  clientName   String?
+  clientName    String?
   clientContact String?
-  clientEmail  String?
+  clientEmail   String?
   customerPhoto String?
-  enquirySource String?  // WhatsApp, Website, Call, Architect, etc.
-  location     String?
-  requirements String?
-  
-  name        String
-  description String?
-  status      String   @default("enquiry") // enquiry, design_sharing, design_finalized, quotation, advance_payment, work_order, completed
-  startDate   DateTime?
-  deadline    DateTime?
-  progressPercentage Float @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  enquirySource String? // WhatsApp, Website, Call, Architect, etc.
+  location      String?
+  requirements  String?
+
+  name               String
+  description        String?
+  status             String    @default("enquiry") // enquiry, design_sharing, design_finalized, quotation, advance_payment, work_order, completed
+  startDate          DateTime?
+  deadline           DateTime?
+  progressPercentage Float     @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   assignedToId String? @db.ObjectId
   assignedTo   User?   @relation("AssignedProjects", fields: [assignedToId], references: [id])
-  
-  // Work Order specific metrics
-  totalPieces       Int @default(0)
-  completedPieces   Int @default(0)
-  deliveryDate      DateTime?
-  clientHandle      String?
 
-  designFiles    String[] @default([])
-  receiptUrl     String?
-  workOrderUrl   String?
+  // Work Order specific metrics
+  totalPieces     Int       @default(0)
+  completedPieces Int       @default(0)
+  deliveryDate    DateTime?
+  clientHandle    String?
+
+  designFiles  String[] @default([])
+  receiptUrl   String?
+  workOrderUrl String?
 
   designs        Design[]
   shopDrawings   ShopDrawing[]
@@ -81,34 +82,35 @@ model Project {
   laborContracts LaborContract[]
   materials      ProjectMaterial[]
   projectClosure ProjectClosure?
+  slabs          Slab[]
 }
 
 model ProjectMaterial {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId   String   @db.ObjectId
-  project     Project  @relation(fields: [projectId], references: [id])
-  inventoryId String   @db.ObjectId
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String    @db.ObjectId
+  project     Project   @relation(fields: [projectId], references: [id])
+  inventoryId String    @db.ObjectId
   inventory   Inventory @relation(fields: [inventoryId], references: [id])
   quantity    Float
   cost        Float
-  addedAt     DateTime @default(now())
+  addedAt     DateTime  @default(now())
 }
 
 model Lead {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  clientName   String
-  contact      String
-  email        String?
-  source       String
-  architect    String?
-  designer     String?
-  status       String   @default("new")
-  notes        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  clientName String
+  contact    String
+  email      String?
+  source     String
+  architect  String?
+  designer   String?
+  status     String   @default("new")
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  assignedToId String?  @db.ObjectId
-  assignedTo   User?    @relation("AssignedLeads", fields: [assignedToId], references: [id])
+  assignedToId String? @db.ObjectId
+  assignedTo   User?   @relation("AssignedLeads", fields: [assignedToId], references: [id])
 }
 
 model Design {
@@ -126,31 +128,31 @@ model Design {
 }
 
 model ShopDrawing {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId      String   @db.ObjectId
-  project        Project  @relation(fields: [projectId], references: [id])
-  title          String
-  type           String   // Shop Drawing, Production Drawing, 3D Render
-  fileUrl        String
-  version        Int      @default(1)
-  status         String   @default("Pending") // Pending, Approved, Rejected
-  comments       String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId String   @db.ObjectId
+  project   Project  @relation(fields: [projectId], references: [id])
+  title     String
+  type      String // Shop Drawing, Production Drawing, 3D Render
+  fileUrl   String
+  version   Int      @default(1)
+  status    String   @default("Pending") // Pending, Approved, Rejected
+  comments  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  approvals      ApprovalRecord[]
+  approvals ApprovalRecord[]
 }
 
 model ApprovalRecord {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId      String   @db.ObjectId
-  project        Project  @relation(fields: [projectId], references: [id])
-  shopDrawingId  String   @db.ObjectId
-  shopDrawing    ShopDrawing @relation(fields: [shopDrawingId], references: [id])
-  approvedBy     String   // Client Name or person approving
-  status         String   // Approved, Rejected, Changes Requested
-  notes          String?
-  date           DateTime @default(now())
+  id            String      @id @default(auto()) @map("_id") @db.ObjectId
+  projectId     String      @db.ObjectId
+  project       Project     @relation(fields: [projectId], references: [id])
+  shopDrawingId String      @db.ObjectId
+  shopDrawing   ShopDrawing @relation(fields: [shopDrawingId], references: [id])
+  approvedBy    String // Client Name or person approving
+  status        String // Approved, Rejected, Changes Requested
+  notes         String?
+  date          DateTime    @default(now())
 }
 
 model Quotation {
@@ -176,20 +178,20 @@ model Quotation {
 }
 
 model Invoice {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId      String   @db.ObjectId
-  project        Project  @relation(fields: [projectId], references: [id])
-  invoiceNumber  String   @unique
-  totalAmount    Float    @default(0)
-  advancePaid    Float    @default(0)
-  balanceAmount  Float    @default(0)
-  status         String   @default("unpaid")
-  paymentMethod  String?
-  paymentDate    DateTime?
-  issueDate      DateTime @default(now())
-  dueDate        DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId     String    @db.ObjectId
+  project       Project   @relation(fields: [projectId], references: [id])
+  invoiceNumber String    @unique
+  totalAmount   Float     @default(0)
+  advancePaid   Float     @default(0)
+  balanceAmount Float     @default(0)
+  status        String    @default("unpaid")
+  paymentMethod String?
+  paymentDate   DateTime?
+  issueDate     DateTime  @default(now())
+  dueDate       DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 }
 
 model ProductCategory {
@@ -205,11 +207,11 @@ model UnitCategory {
 }
 
 model Inventory {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  type        String   // block, slab, consumable
-  jobWorkType String   @default("company") // company, client
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  type        String // block, slab, consumable
+  jobWorkType String @default("company") // company, client
   itemName    String
-  
+
   // Dimensions for blocks/slabs
   blockNumber String?
   thickness   Float?
@@ -217,62 +219,82 @@ model Inventory {
   width       Float?
   height      Float?
   weight      Float?
-  
+
   quantity    Float    @default(0) // Can be sq_ft or pieces
-  unit        String   // sq_ft, pieces, kg, liters, tons
+  unit        String // sq_ft, pieces, kg, liters, tons
   supplier    String?
   costPerUnit Float    @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
   projectMaterials ProjectMaterial[]
+  slabs            Slab[]
+  stockBalances    DailyStockBalance[]
+  logs             InventoryLog[]
+}
+
+model InventoryLog {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  inventoryId String    @db.ObjectId
+  inventory   Inventory @relation(fields: [inventoryId], references: [id])
+  type        String // IN or OUT
+  quantity    Float
+  remarks     String?
+  createdAt   DateTime  @default(now())
 }
 
 model Machine {
   id                       String   @id @default(auto()) @map("_id") @db.ObjectId
   name                     String
-  type                     String   // CNC, Cutter, Polisher
+  type                     String // CNC, Cutter, Polisher
   status                   String   @default("active") // active, maintenance, inactive
   hourlyCost               Float    @default(0)
   totalRunHours            Float    @default(0)
   maintenanceIntervalHours Float    @default(200)
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
-  
+
   productionLogs ProductionLog[]
   machineLogs    MachineLog[]
   attendances    Attendance[]
+  pieceLogs      PieceLog[]
 }
 
 model ProductionLog {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId   String?  @db.ObjectId
-  project     Project? @relation(fields: [projectId], references: [id])
-  productId   String?
-  productName String?
-  stage       String   // cutting, cnc, carving, inlay, polishing, packing
-  machineId   String?  @db.ObjectId
-  machine     Machine? @relation(fields: [machineId], references: [id])
-  workerId    String?  @db.ObjectId
-  worker      User?    @relation(fields: [workerId], references: [id])
-  startTime   DateTime @default(now())
-  endTime     DateTime?
-  status           String   @default("in_progress") // in_progress, completed, paused
-  quantityProduced Float    @default(0) // Sq.Ft. or Pieces produced
-  
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId        String?   @db.ObjectId
+  project          Project?  @relation(fields: [projectId], references: [id])
+  productId        String?
+  productName      String?
+  stage            String // cutting, cnc, carving, inlay, polishing, packing
+  machineId        String?   @db.ObjectId
+  machine          Machine?  @relation(fields: [machineId], references: [id])
+  workerId         String?   @db.ObjectId
+  worker           User?     @relation(fields: [workerId], references: [id])
+  startTime        DateTime  @default(now())
+  endTime          DateTime?
+  status           String    @default("in_progress") // in_progress, completed, paused
+  quantityProduced Float     @default(0) // Sq.Ft. or Pieces produced
+
   // Material Tracking and Workflow Fields
-  transactionType  String?  // OUT (Given to staff), IN (Received from staff)
-  approvalStatus   String   @default("pending") // pending, approved, rejected
-  startPhotos      Json?    // { machine, unit, software }
-  vendorName       String?  // If given to outside vendor
-  isReturned       Boolean? @default(false)
-  returnedQty      Float?   @default(0)
-  returnDate       DateTime?
-  parentLogId      String?  @db.ObjectId
-  
-  remarks          String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  transactionType String? // OUT (Given to staff), IN (Received from staff)
+  approvalStatus  String    @default("pending") // pending, approved, rejected
+  startPhotos     Json? // { machine, unit, software }
+  vendorName      String? // If given to outside vendor
+  vendorId        String?   @db.ObjectId
+  vendor          Vendor?   @relation(fields: [vendorId], references: [id])
+  vehicleNumber   String? // For tracking transport vehicles
+  challanNumber   String? // For manual auto-numbering/slip tracking
+  slabId          String?   @db.ObjectId
+  pieceIds        String[]  @default([])
+  isReturned      Boolean?  @default(false)
+  returnedQty     Float?    @default(0)
+  returnDate      DateTime?
+  parentLogId     String?   @db.ObjectId
+
+  remarks   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Crate {
@@ -284,56 +306,56 @@ model Crate {
   status      String   @default("packing")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
-  dispatchId  String?  @db.ObjectId
-  dispatch    Dispatch? @relation(fields: [dispatchId], references: [id])
+
+  dispatchId String?   @db.ObjectId
+  dispatch   Dispatch? @relation(fields: [dispatchId], references: [id])
 }
 
 model Dispatch {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId      String   @db.ObjectId
-  project        Project  @relation(fields: [projectId], references: [id])
-  vehicleNumber  String
-  driverDetails  String?
-  lrNumber       String?
-  lrUrl          String?
-  status         String   @default("in_transit")
-  dispatchDate   DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId     String   @db.ObjectId
+  project       Project  @relation(fields: [projectId], references: [id])
+  vehicleNumber String
+  driverDetails String?
+  lrNumber      String?
+  lrUrl         String?
+  status        String   @default("in_transit")
+  dispatchDate  DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  crates         Crate[]
+  crates Crate[]
 }
 
 model Attendance {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId      String   @db.ObjectId
-  user        User     @relation(fields: [userId], references: [id])
-  date        DateTime @default(now())
-  checkIn     DateTime @default(now())
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  user        User      @relation(fields: [userId], references: [id])
+  date        DateTime  @default(now())
+  checkIn     DateTime  @default(now())
   checkOut    DateTime?
-  machineId   String?  @db.ObjectId
-  machine     Machine? @relation(fields: [machineId], references: [id])
+  machineId   String?   @db.ObjectId
+  machine     Machine?  @relation(fields: [machineId], references: [id])
   photoUrl    String?
   gpsLocation String?
-  status      String   @default("present") // present, absent, half_day
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status      String    @default("present") // present, absent, half_day
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model Payroll {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId         String   @db.ObjectId
-  user           User     @relation(fields: [userId], references: [id])
-  month          String
-  basicSalary    Float    @default(0)
-  incentives     Float    @default(0)
-  deductions     Float    @default(0)
-  netSalary      Float    @default(0)
-  status         String   @default("pending")
-  paymentDate    DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  user        User      @relation(fields: [userId], references: [id])
+  month       String
+  basicSalary Float     @default(0)
+  incentives  Float     @default(0)
+  deductions  Float     @default(0)
+  netSalary   Float     @default(0)
+  status      String    @default("pending")
+  paymentDate DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 model QA_QC {
@@ -352,30 +374,31 @@ model QA_QC {
 }
 
 model MachineLog {
-  id               String   @id @default(auto()) @map("_id") @db.ObjectId
-  machineId        String   @db.ObjectId
-  machine          Machine  @relation(fields: [machineId], references: [id])
-  projectId        String?  @db.ObjectId
-  project          Project? @relation(fields: [projectId], references: [id])
-  productId        String?
-  productName      String?
-  startTime        DateTime
-  endTime          DateTime?
-  downtime         Float    @default(0) // hours
-  quantityProduced Float?   @default(0)
-  operatorId       String?  @db.ObjectId
-  operator         User?    @relation(fields: [operatorId], references: [id])
-  machinePhotoUrl  String?
-  unitPhotoUrl     String?
-  softwarePhotoUrl String?
+  id                  String    @id @default(auto()) @map("_id") @db.ObjectId
+  machineId           String    @db.ObjectId
+  machine             Machine   @relation(fields: [machineId], references: [id])
+  projectId           String?   @db.ObjectId
+  project             Project?  @relation(fields: [projectId], references: [id])
+  productId           String?
+  productName         String?
+  startTime           DateTime
+  endTime             DateTime?
+  estimatedHours      Float?    @default(0) // hours
+  downtime            Float     @default(0) // hours
+  quantityProduced    Float?    @default(0)
+  operatorId          String?   @db.ObjectId
+  operator            User?     @relation(fields: [operatorId], references: [id])
+  machinePhotoUrl     String?
+  unitPhotoUrl        String?
+  softwarePhotoUrl    String?
   endMachinePhotoUrl  String?
   endUnitPhotoUrl     String?
   endSoftwarePhotoUrl String?
-  status           String   @default("active") // active, completed
-  approvalStatus   String   @default("pending") // pending, approved, rejected
-  remarks          String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  status              String    @default("active") // active, completed
+  approvalStatus      String    @default("pending") // pending, approved, rejected
+  remarks             String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 }
 
 model LaborContract {
@@ -383,7 +406,7 @@ model LaborContract {
   projectId      String   @db.ObjectId
   project        Project  @relation(fields: [projectId], references: [id])
   contractorName String
-  jobType        String   // polishing, inlay, carving
+  jobType        String // polishing, inlay, carving
   rate           Float
   totalAmount    Float    @default(0)
   paidAmount     Float    @default(0)
@@ -394,7 +417,7 @@ model LaborContract {
 
 model Expense {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  category    String   // maintenance, consumables, tools, fuel, water, transport, packaging, tea_refreshments, travel, hotel, food, courier, internet, phone, vehicle, miscellaneous
+  category    String // maintenance, consumables, tools, fuel, water, transport, packaging, tea_refreshments, travel, hotel, food, courier, internet, phone, vehicle, miscellaneous
   amount      Float
   description String?
   date        DateTime @default(now())
@@ -405,26 +428,110 @@ model Expense {
 }
 
 model ElectricityLog {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  month          String   // e.g. "2026-06"
-  meterReading   Float
-  unitsConsumed  Float
-  totalBill      Float
-  paymentStatus  String   @default("pending") // pending, paid
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  month         String // e.g. "2026-06"
+  meterReading  Float
+  unitsConsumed Float
+  totalBill     Float
+  paymentStatus String   @default("pending") // pending, paid
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model ProjectClosure {
-  id               String   @id @default(auto()) @map("_id") @db.ObjectId
-  projectId        String   @unique @db.ObjectId
-  project          Project  @relation(fields: [projectId], references: [id])
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId        String    @unique @db.ObjectId
+  project          Project   @relation(fields: [projectId], references: [id])
   deliveryDate     DateTime
   installationDate DateTime?
   clientFeedback   String?
-  rating           Int?     // 1 to 5
+  rating           Int? // 1 to 5
   warrantyEnd      DateTime?
-  status           String   @default("closed")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  status           String    @default("closed")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+model Slab {
+  id          String     @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String     @db.ObjectId
+  project     Project    @relation(fields: [projectId], references: [id])
+  inventoryId String?    @db.ObjectId
+  inventory   Inventory? @relation(fields: [inventoryId], references: [id])
+  name        String
+  size        String?
+  cost        Float      @default(0)
+  status      String     @default("active")
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  pieces Piece[]
+}
+
+model Piece {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  slabId      String   @db.ObjectId
+  slab        Slab     @relation(fields: [slabId], references: [id])
+  pieceNumber Int
+  productName String?
+  vendorName  String?
+  vendorId    String?  @db.ObjectId
+  vendor      Vendor?  @relation(fields: [vendorId], references: [id])
+  stage       String   @default("Production") // Production, Job Work, Packing, Dispatch
+  status      String   @default("pending") // pending, active, completed
+  size        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  logs PieceLog[]
+}
+
+model PieceLog {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  pieceId       String    @db.ObjectId
+  piece         Piece     @relation(fields: [pieceId], references: [id])
+  stage         String // cutting, polishing, packaging
+  status        String    @default("active") // active, completed, approved
+  startTime     DateTime  @default(now())
+  endTime       DateTime?
+  operatorId    String?   @db.ObjectId
+  operator      User?     @relation(fields: [operatorId], references: [id])
+  machineId     String?   @db.ObjectId
+  machine       Machine?  @relation(fields: [machineId], references: [id])
+  vendorName    String?
+  vendorId      String?   @db.ObjectId
+  vendor        Vendor?   @relation(fields: [vendorId], references: [id])
+  vehicleNumber String?
+  startPhotoUrl String?
+  endPhotoUrl   String?
+  remarks       String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model DailyStockBalance {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  inventoryId String    @db.ObjectId
+  inventory   Inventory @relation(fields: [inventoryId], references: [id])
+  date        DateTime
+  openingQty  Float
+  inQty       Float     @default(0)
+  outQty      Float     @default(0)
+  closingQty  Float
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+model Vendor {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  contact   String?
+  address   String?
+  services  String[] @default([])
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  productionLogs ProductionLog[]
+  pieceLogs      PieceLog[]
+  pieces         Piece[]
 }

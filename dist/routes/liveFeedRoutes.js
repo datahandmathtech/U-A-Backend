@@ -3,12 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
-const machineLogHelper_1 = require("../utils/machineLogHelper");
 const router = (0, express_1.Router)();
 // Get live factory feed (Machine Logs for Selected Date)
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const dateParam = req.query.date;
         const queryDate = dateParam ? new Date(dateParam) : new Date();
         const startOfDay = new Date(queryDate);

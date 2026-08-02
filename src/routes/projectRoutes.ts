@@ -12,7 +12,7 @@ router.get('/', authenticate, async (req, res) => {
       include: { 
         assignedTo: { select: { name: true } },
         quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
-        productionLogs: { select: { quantityProduced: true, status: true } }
+        slabs: { select: { _count: { select: { pieces: true } } } }
       }
     });
 
@@ -28,16 +28,17 @@ router.get('/', authenticate, async (req, res) => {
         }
       }
 
-      let calculatedCompletedPieces = 0;
-      if (p.productionLogs && p.productionLogs.length > 0) {
-        calculatedCompletedPieces = p.productionLogs
-          .filter((log: any) => log.status === 'completed')
-          .reduce((acc: number, log: any) => acc + (Number(log.quantityProduced) || 0), 0);
-      }
+      // Completed Pieces = Total number of actual pieces that exist in the pipeline for this project
+      let calculatedCompletedPieces = p.slabs?.reduce((sum: number, slab: any) => sum + (slab._count?.pieces || 0), 0) || 0;
 
       // We remove the included relations from the response to save payload size, 
       // but attach the calculated fields.
-      const { quotations, productionLogs, ...projectData } = p;
+      const { quotations, slabs, ...projectData } = p;
+
+      // Cap completed pieces to not exceed total pieces (to match item-based counting)
+      if (calculatedTotalPieces > 0 && calculatedCompletedPieces > calculatedTotalPieces) {
+        calculatedCompletedPieces = calculatedTotalPieces;
+      }
 
       return {
         ...projectData,
@@ -87,14 +88,33 @@ router.post('/', authenticate, async (req, res) => {
     const fyStartYear = currentMonth >= 3 ? currentYear : currentYear - 1;
     const fyStartDate = new Date(fyStartYear, 3, 1); // April 1st
 
-    const count = await prisma.project.count({
+    const latestProject = await prisma.project.findFirst({
       where: {
         createdAt: {
           gte: fyStartDate
-        }
-      }
+        },
+        projectId: { startsWith: 'U-A-' }
+      },
+      orderBy: { createdAt: 'desc' }
     });
-    const projectId = `U-A-${String(count + 1).padStart(2, '0')}`;
+
+    let nextNum = 1;
+    if (latestProject && latestProject.projectId) {
+      const match = latestProject.projectId.match(/U-A-(\d+)/);
+      if (match && match[1]) {
+        nextNum = parseInt(match[1]) + 1;
+      }
+    }
+    
+    // To be absolutely safe against collisions from manual edits or deletions not caught by latestProject
+    // We will query if this exact ID exists. If it does, we increment.
+    let projectId = `U-A-${String(nextNum).padStart(2, '0')}`;
+    let exists = await prisma.project.findUnique({ where: { projectId } });
+    while (exists) {
+      nextNum++;
+      projectId = `U-A-${String(nextNum).padStart(2, '0')}`;
+      exists = await prisma.project.findUnique({ where: { projectId } });
+    }
 
     const newProject = await prisma.project.create({
       data: {
@@ -111,7 +131,7 @@ router.post('/', authenticate, async (req, res) => {
         status: status || 'enquiry',
         startDate: startDate ? new Date(startDate) : new Date(),
         deadline: deadline ? new Date(deadline) : null,
-        assignedToId,
+        assignedToId: assignedToId || undefined,
         customerPhoto,
         totalPieces: totalPieces ? parseInt(totalPieces) : 0,
         completedPieces: completedPieces ? parseInt(completedPieces) : 0,
@@ -122,7 +142,48 @@ router.post('/', authenticate, async (req, res) => {
     
     res.status(201).json(newProject);
   } catch (error) {
+    console.error('Error creating project:', error);
     res.status(500).json({ message: 'Server error creating project' });
+  }
+});
+
+// Sync slabs from quotation (for backward compatibility / stuck projects)
+router.post('/:id/sync-slabs', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const project = await prisma.project.findUnique({
+      where: { id: String(id) },
+      include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
+    });
+
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
+    const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
+    if (activeStatuses.includes(project.status) && project.slabs.length === 0 && project.quotations.length > 0) {
+      const firstQuote = project.quotations[0];
+      if (firstQuote && firstQuote.products) {
+        const products = firstQuote.products as any[];
+        for (const prod of products) {
+          const qty = Number(prod.qty) || 1;
+          for (let i = 1; i <= qty; i++) {
+            const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
+            const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
+            await prisma.slab.create({
+              data: {
+                projectId: project.id,
+                name: pieceName,
+                size: sizeStr,
+                status: 'pending'
+              }
+            });
+          }
+        }
+      }
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error syncing slabs:', error);
+    res.status(500).json({ message: 'Server error syncing slabs' });
   }
 });
 
@@ -137,8 +198,33 @@ router.patch('/:id', authenticate, async (req, res) => {
 
     const updated = await prisma.project.update({
       where: { id: String(id) },
-      data: updateData
+      data: updateData,
+      include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
     });
+    
+    // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
+    const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
+    if (updateData.status && activeStatuses.includes(updateData.status) && updated.slabs.length === 0 && updated.quotations.length > 0) {
+      const firstQuote = updated.quotations[0];
+      if (firstQuote && firstQuote.products) {
+        const products = firstQuote.products as any[];
+        for (const prod of products) {
+          const qty = Number(prod.qty) || 1;
+          for (let i = 1; i <= qty; i++) {
+            const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
+            const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
+            await prisma.slab.create({
+              data: {
+                projectId: updated.id,
+                name: pieceName,
+                size: sizeStr,
+                status: 'pending'
+              }
+            });
+          }
+        }
+      }
+    }
     
     res.json(updated);
   } catch (error) {
@@ -151,22 +237,38 @@ router.delete('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     
-    // In a real app we might soft-delete or cascade delete. For now, hard delete.
-    // Need to delete related records first or add cascade in schema
-    // Since we don't have cascade in schema, we should delete related records
-    await prisma.shopDrawing.deleteMany({ where: { projectId: String(id) } });
-    await prisma.quotation.deleteMany({ where: { projectId: String(id) } });
-    await prisma.invoice.deleteMany({ where: { projectId: String(id) } });
-    await prisma.projectMaterial.deleteMany({ where: { projectId: String(id) } });
-    await prisma.productionLog.deleteMany({ where: { projectId: String(id) } });
+    // Find all slabs for this project to delete their pieces and pieceLogs
+    const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true } });
+    const slabIds = slabs.map(s => s.id);
     
-    await prisma.project.delete({
-      where: { id: String(id) }
-    });
+    const pieces = await prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
+    const pieceIds = pieces.map(p => p.id);
+
+    // Run deletions in a transaction to ensure everything is deleted or nothing is
+    await prisma.$transaction([
+      prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }),
+      prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }),
+      prisma.approvalRecord.deleteMany({ where: { projectId: String(id) } }),
+      prisma.shopDrawing.deleteMany({ where: { projectId: String(id) } }),
+      prisma.design.deleteMany({ where: { projectId: String(id) } }),
+      prisma.quotation.deleteMany({ where: { projectId: String(id) } }),
+      prisma.invoice.deleteMany({ where: { projectId: String(id) } }),
+      prisma.productionLog.deleteMany({ where: { projectId: String(id) } }),
+      prisma.projectMaterial.deleteMany({ where: { projectId: String(id) } }),
+      prisma.machineLog.deleteMany({ where: { projectId: String(id) } }),
+      prisma.laborContract.deleteMany({ where: { projectId: String(id) } }),
+      prisma.projectClosure.deleteMany({ where: { projectId: String(id) } }),
+      prisma.dispatch.deleteMany({ where: { projectId: String(id) } }),
+      prisma.qA_QC.deleteMany({ where: { projectId: String(id) } }),
+      prisma.crate.deleteMany({ where: { projectId: String(id) } }),
+      prisma.slab.deleteMany({ where: { projectId: String(id) } }),
+      prisma.project.delete({ where: { id: String(id) } })
+    ]);
     
-    res.json({ message: 'Project deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error deleting project' });
+    res.json({ message: 'Project and all related entries deleted successfully' });
+  } catch (error: any) {
+    console.error("Delete Project Error:", error);
+    res.status(500).json({ message: error.message || 'Server error deleting project' });
   }
 });
 

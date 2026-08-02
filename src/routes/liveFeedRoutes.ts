@@ -8,7 +8,6 @@ const router = Router();
 // Get live factory feed (Machine Logs for Selected Date)
 router.get('/', authenticate, async (req, res) => {
   try {
-    await autoSplitActiveMachineLogs();
     const dateParam = req.query.date as string;
     const queryDate = dateParam ? new Date(dateParam) : new Date();
 

@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
-import { autoSplitActiveMachineLogs } from '../utils/machineLogHelper';
 
 const router = Router();
 
 // Get Machine Logs
 router.get('/', authenticate, async (req, res) => {
   try {
-    await autoSplitActiveMachineLogs();
     const logs = await prisma.machineLog.findMany({
       orderBy: { createdAt: 'desc' },
       include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
@@ -22,7 +20,6 @@ router.get('/', authenticate, async (req, res) => {
 // Live Feed Endpoint
 router.get('/live-feed', authenticate, async (req, res) => {
   try {
-    await autoSplitActiveMachineLogs();
     const activeLogs = await prisma.machineLog.findMany({
       where: { status: 'active' },
       orderBy: { startTime: 'desc' },
@@ -64,13 +61,14 @@ router.post('/', authenticate, async (req, res) => {
 // Machine Clock-In (One-Step workflow for worker)
 router.post('/clock-in', authenticate, async (req, res) => {
   try {
-    const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName } = req.body;
+    const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours } = req.body;
     const operatorId = (req as any).user?.id;
 
     const newLog = await prisma.machineLog.create({
       data: {
         machineId,
         startTime: new Date(),
+        estimatedHours: estimatedHours ? Number(estimatedHours) : null,
         machinePhotoUrl,
         unitPhotoUrl,
         softwarePhotoUrl,
@@ -80,7 +78,7 @@ router.post('/clock-in', authenticate, async (req, res) => {
         productId,
         productName,
         status: 'active',
-        approvalStatus: 'pending'
+        approvalStatus: 'in_progress'
       }
     });
     
@@ -93,7 +91,6 @@ router.post('/clock-in', authenticate, async (req, res) => {
 // Get ALL Machine Logs for Today
 router.get('/daily-logs', authenticate, async (req, res) => {
   try {
-    await autoSplitActiveMachineLogs();
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -120,7 +117,6 @@ router.get('/daily-logs', authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authenticate, async (req, res) => {
   try {
-    await autoSplitActiveMachineLogs();
     const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
     
     let log = await prisma.machineLog.findFirst({
@@ -149,17 +145,38 @@ router.post('/clock-out', authenticate, async (req, res) => {
       data: {
         endTime: endTime,
         status: 'completed',
+        approvalStatus: 'pending',
         remarks: remarks ? `${log.remarks || ''}\nOut: ${remarks}`.trim() : log.remarks,
         endMachinePhotoUrl,
         endUnitPhotoUrl,
         endSoftwarePhotoUrl,
-        quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0
+        quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1
       }
     });
     
     await prisma.machine.update({
       where: { id: log.machineId },
       data: { totalRunHours: { increment: hours } }
+    });
+
+    // Also create a production log so it goes to the Admin Approvals tab
+    await prisma.productionLog.create({
+      data: {
+        projectId: log.projectId,
+        machineId: log.machineId,
+        stage: 'Production Work',
+        quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1,
+        transactionType: 'IN',
+        startPhotos: {
+          machine: endMachinePhotoUrl,
+          unit: endUnitPhotoUrl,
+          software: endSoftwarePhotoUrl
+        },
+        workerId: log.operatorId,
+        parentLogId: log.id,
+        approvalStatus: 'pending',
+        status: 'completed'
+      }
     });
     
     res.json(updatedLog);
@@ -198,12 +215,15 @@ router.put('/reject/:id', authenticate, async (req, res) => {
 // Admin: Edit Log
 router.put('/:id', authenticate, async (req, res) => {
   try {
-    const { quantityProduced, remarks } = req.body;
+    const { quantityProduced, remarks, projectId, productId, productName } = req.body;
     const updated = await prisma.machineLog.update({
       where: { id: req.params.id as string },
       data: {
         quantityProduced: quantityProduced ? Number(quantityProduced) : undefined,
-        remarks: remarks !== undefined ? String(remarks) : undefined
+        remarks: remarks !== undefined ? String(remarks) : undefined,
+        projectId: projectId ? String(projectId) : undefined,
+        productId: productId ? String(productId) : undefined,
+        productName: productName ? String(productName) : undefined
       }
     });
     res.json(updated);

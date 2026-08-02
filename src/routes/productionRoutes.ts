@@ -186,7 +186,7 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
 // Submit new Material IN/OUT log
 router.post('/material-log', authenticate, async (req, res) => {
   try {
-    const { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, parentLogId } = req.body;
+    const { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds } = req.body;
     
     let projectId = undefined;
     if (parentLogId) {
@@ -196,26 +196,95 @@ router.post('/material-log', authenticate, async (req, res) => {
       if (parentLog && parentLog.projectId) {
         projectId = parentLog.projectId;
       }
+    } else {
+      projectId = req.body.projectId;
     }
 
+    // Handle multiple vendors for OUT/IN transactions
+    if (vendors && Array.isArray(vendors) && vendors.length > 0) {
+      const newLogs = await Promise.all(vendors.map(async (v: any) => {
+        return prisma.productionLog.create({
+          data: {
+            projectId,
+            stage: v.stage || stage,
+            quantityProduced: v.qty ? parseFloat(v.qty) : 0,
+            transactionType,
+            startPhotos,
+            workerId: workerId?.trim() || undefined,
+            vendorName: v.vendorName?.trim() || undefined,
+            vendorId: v.vendorId?.trim() || undefined,
+            vehicleNumber: vehicleNumber?.trim() || undefined,
+            challanNumber: challanNumber?.trim() || undefined,
+            productId: productId?.trim() || undefined,
+            productName: productName?.trim() || undefined,
+            slabId: slabId?.trim() || undefined,
+            pieceIds: v.pieceIds || pieceIds || [],
+            approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+            status: 'completed',
+            isReturned: false,
+            returnedQty: 0
+          }
+        });
+      }));
+      return res.status(201).json(newLogs);
+    }
+
+    // Single vendor or regular OUT/IN transaction
     const newLog = await prisma.productionLog.create({
       data: {
         projectId,
         stage,
         quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0,
-        transactionType, // 'OUT' or 'IN'
-        startPhotos, // { machine, unit, software }
-        workerId: workerId || undefined,
-        vendorName: vendorName || undefined,
-        parentLogId: parentLogId || undefined,
-        approvalStatus: 'pending',
-        status: 'completed' // Consider it a completed discrete log entry
+        transactionType,
+        startPhotos,
+        workerId: workerId?.trim() || undefined,
+        vendorName: vendorName?.trim() || undefined,
+        vendorId: vendorId?.trim() || undefined,
+        vehicleNumber: vehicleNumber?.trim() || undefined,
+        challanNumber: challanNumber?.trim() || undefined,
+        parentLogId: parentLogId?.trim() || undefined,
+        productId: productId?.trim() || undefined,
+        productName: productName?.trim() || undefined,
+        slabId: slabId?.trim() || undefined,
+        pieceIds: pieceIds || [],
+        approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+        status: 'completed',
+        isReturned: false,
+        returnedQty: 0
       }
     });
+
+    // Update parent log for IN transactions (Partial returns support)
+    if (newLog.transactionType === 'IN' && newLog.parentLogId) {
+      try {
+        const parentLog = await prisma.productionLog.findUnique({ where: { id: newLog.parentLogId } });
+        if (parentLog) {
+          // Calculate new returned qty
+          // But wait, the IN log requires admin approval. Should we update the balance now or after approval?
+          // The old code updated `isReturned` only if `newLog.approvalStatus === 'approved'`.
+          // Let's update it immediately so staff sees it, or wait for approval.
+          // Usually, it's safer to just track it based on the IN logs' sum later.
+          // For now, let's update it immediately.
+          const newReturnedQty = (parentLog.returnedQty || 0) + (newLog.quantityProduced || 0);
+          const isFullyReturned = newReturnedQty >= (parentLog.quantityProduced || 0);
+          
+          await prisma.productionLog.update({
+            where: { id: newLog.parentLogId },
+            data: { 
+              returnedQty: newReturnedQty,
+              isReturned: isFullyReturned 
+            }
+          });
+        }
+      } catch (err) {
+        console.warn(`Failed to update parentLog returnedQty for ${newLog.parentLogId}:`, err);
+      }
+    }
+
     res.status(201).json(newLog);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Material Log Error:", error);
-    res.status(500).json({ message: 'Server error creating material log' });
+    res.status(500).json({ message: 'Server error creating material log', error: error.message, stack: error.stack });
   }
 });
 
@@ -262,16 +331,41 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
         });
         
         for (const split of splits) {
-          await prisma.productionLog.create({
+          const newSplitLog = await prisma.productionLog.create({
             data: {
               ...restLogData,
               approvalStatus: 'approved',
-              projectId: String(split.projectId),
+              projectId: split.projectId ? String(split.projectId) : undefined,
               productId: split.productId ? String(split.productId) : undefined,
               productName: split.productName ? String(split.productName) : undefined,
+              slabId: split.slabId ? String(split.slabId) : undefined,
+              pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
               quantityProduced: Number(split.qty)
             }
           });
+          
+          if (split.pieceIds && split.pieceIds.length > 0) {
+            for (const pieceId of split.pieceIds) {
+              await prisma.piece.update({
+                where: { id: pieceId },
+                data: { 
+                  status: 'completed',
+                  ...(split.stage && { stage: split.stage })
+                }
+              });
+              await prisma.pieceLog.create({
+                data: {
+                  pieceId: pieceId,
+                  stage: originalLog.stage,
+                  status: 'completed',
+                  operatorId: originalLog.workerId,
+                  remarks: 'Auto-logged from Material/Machine Approval',
+                  vehicleNumber: originalLog.vehicleNumber || undefined,
+                  endTime: new Date()
+                }
+              });
+            }
+          }
         }
       } else {
         // Full approval
@@ -281,9 +375,11 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
           where: { id: String(id) },
           data: {
             approvalStatus,
-            projectId: String(firstSplit.projectId),
+            projectId: firstSplit.projectId ? String(firstSplit.projectId) : undefined,
             productId: firstSplit.productId ? String(firstSplit.productId) : undefined,
             productName: firstSplit.productName ? String(firstSplit.productName) : undefined,
+            slabId: firstSplit.slabId ? String(firstSplit.slabId) : undefined,
+            pieceIds: firstSplit.pieceIds && firstSplit.pieceIds.length > 0 ? firstSplit.pieceIds : [],
             quantityProduced: Number(firstSplit.qty)
           }
         });
@@ -294,12 +390,40 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
             data: {
               ...restLogData,
               approvalStatus: 'approved',
-              projectId: String(split.projectId),
+              projectId: split.projectId ? String(split.projectId) : undefined,
               productId: split.productId ? String(split.productId) : undefined,
               productName: split.productName ? String(split.productName) : undefined,
+              slabId: split.slabId ? String(split.slabId) : undefined,
+              pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
               quantityProduced: Number(split.qty)
             }
           });
+        }
+        
+        // Update pieces for all splits including the first one
+        for (const split of splits) {
+          if (split.pieceIds && split.pieceIds.length > 0) {
+            for (const pieceId of split.pieceIds) {
+              await prisma.piece.update({
+                where: { id: pieceId },
+                data: { 
+                  status: 'completed',
+                  stage: originalLog.stage.replace(' Work', '')
+                }
+              });
+              await prisma.pieceLog.create({
+                data: {
+                  pieceId: pieceId,
+                  stage: originalLog.stage,
+                  status: 'completed',
+                  operatorId: originalLog.workerId,
+                  remarks: 'Auto-logged from Material/Machine Approval',
+                  vehicleNumber: originalLog.vehicleNumber || undefined,
+                  endTime: new Date()
+                }
+              });
+            }
+          }
         }
       }
 
@@ -308,13 +432,19 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
         for (const split of splits) {
           let remainingToReturn = Number(split.qty);
           
+          const whereClause: any = {
+            transactionType: 'OUT',
+            approvalStatus: 'approved',
+            stage: originalLog.stage,
+          };
+          if (originalLog.workerId) {
+            whereClause.workerId = originalLog.workerId;
+          } else if (originalLog.vendorName) {
+            whereClause.vendorName = originalLog.vendorName;
+          }
+
           const pendingOutLogs = await prisma.productionLog.findMany({
-            where: {
-              transactionType: 'OUT',
-              approvalStatus: 'approved',
-              projectId: String(split.projectId),
-              productId: split.productId ? String(split.productId) : undefined
-            },
+            where: whereClause,
             orderBy: { createdAt: 'asc' }
           });
           
@@ -327,11 +457,17 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
             
             if (pendingQty > 0) {
               const returnAmount = Math.min(pendingQty, remainingToReturn);
+              const updatedPieceIds = Array.from(new Set([...(outLog.pieceIds || []), ...(split.pieceIds || [])]));
               await prisma.productionLog.update({
                 where: { id: outLog.id },
                 data: {
                   returnedQty: returnedQty + returnAmount,
-                  isReturned: (returnedQty + returnAmount) >= qtyProduced
+                  isReturned: (returnedQty + returnAmount) >= qtyProduced,
+                  projectId: split.projectId ? String(split.projectId) : undefined,
+                  productId: split.productId ? String(split.productId) : undefined,
+                  productName: split.productName ? String(split.productName) : undefined,
+                  slabId: split.slabId ? String(split.slabId) : undefined,
+                  pieceIds: updatedPieceIds
                 }
               });
               remainingToReturn -= returnAmount;
@@ -349,16 +485,43 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
       });
     }
 
-    if (approvalStatus === 'approved' && updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
-      await prisma.productionLog.update({
-        where: { id: updatedLog.parentLogId },
-        data: { isReturned: true }
-      });
+    if (updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
+      try {
+        if (updatedLog.stage === 'Production Work') {
+          const totalApprovedQty = splits && splits.length > 0 && approvalStatus === 'approved' 
+            ? splits.reduce((acc: number, s: any) => acc + Number(s.qty), 0)
+            : updatedLog.quantityProduced;
+            
+          const combinedProductName = splits && splits.length > 0 && approvalStatus === 'approved'
+            ? splits.map((s: any) => s.productName).filter(Boolean).join(' | ')
+            : updatedLog.productName;
+            
+          await prisma.machineLog.update({
+            where: { id: updatedLog.parentLogId },
+            data: { 
+              approvalStatus: approvalStatus, 
+              status: 'completed',
+              projectId: updatedLog.projectId || undefined,
+              quantityProduced: totalApprovedQty || 0,
+              productName: combinedProductName || undefined
+            }
+          });
+        } else {
+          await prisma.productionLog.update({
+            where: { id: updatedLog.parentLogId },
+            data: { isReturned: true }
+          });
+        }
+      } catch (err) {
+        console.warn(`Failed to update parentLogId ${updatedLog.parentLogId}:`, err);
+      }
     }
 
     res.json(updatedLog);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error updating material log approval' });
+  } catch (error: any) {
+    console.error("Material Log Error:", error);
+    require('fs').writeFileSync('C:\\Users\\ABHAY\\.gemini\\antigravity\\brain\\ef5a82a2-0db7-4636-a7d5-c9f7739376d2\\scratch\\error.log', String(error) + '\n' + (error.stack || ''));
+    res.status(500).json({ message: error.message || 'Server error updating material log approval' });
   }
 });
 
@@ -411,13 +574,18 @@ router.patch('/:id/return', authenticate, async (req: any, res: any) => {
 // Edit material log
 router.put('/:id', authenticate, async (req, res) => {
   try {
-    const { quantityProduced, returnedQty, stage } = req.body;
+    const { quantityProduced, returnedQty, stage, projectId, productId, productName, slabId, pieceIds } = req.body;
     const updated = await prisma.productionLog.update({
       where: { id: req.params.id as string },
       data: {
         quantityProduced: quantityProduced ? Number(quantityProduced) : undefined,
         returnedQty: returnedQty !== undefined ? Number(returnedQty) : undefined,
-        stage: stage ? String(stage) : undefined
+        stage: stage ? String(stage) : undefined,
+        projectId: projectId ? String(projectId) : undefined,
+        productId: productId ? String(productId) : undefined,
+        productName: productName ? String(productName) : undefined,
+        slabId: slabId ? String(slabId) : undefined,
+        pieceIds: pieceIds ? pieceIds : undefined
       }
     });
     res.json(updated);

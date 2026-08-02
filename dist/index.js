@@ -40,6 +40,8 @@ const closureRoutes_1 = __importDefault(require("./routes/closureRoutes"));
 const liveFeedRoutes_1 = __importDefault(require("./routes/liveFeedRoutes"));
 const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const drawingRoutes_1 = __importDefault(require("./routes/drawingRoutes"));
+const slabRoutes_1 = __importDefault(require("./routes/slabRoutes"));
+const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
 // Routes
 app.use('/api/auth', authRoutes_1.default);
 app.use('/api/leads', leadRoutes_1.default);
@@ -59,11 +61,13 @@ app.use('/api/qa', qaRoutes_1.default);
 app.use('/api/labor', laborRoutes_1.default);
 app.use('/api/machine-logs', machineLogRoutes_1.default);
 app.use('/api/expenses', expenseRoutes_1.default);
+app.use('/api/slabs', slabRoutes_1.default);
 app.use('/api/electricity', electricityRoutes_1.default);
 app.use('/api/closure', closureRoutes_1.default);
 app.use('/api/live-feed', liveFeedRoutes_1.default);
 app.use('/api/upload', uploadRoutes_1.default);
 app.use('/api/drawings', drawingRoutes_1.default);
+app.use('/api/vendors', vendorRoutes_1.default);
 // Basic Route
 app.get('/api/health', async (req, res) => {
     try {
@@ -88,8 +92,11 @@ app.use(express_1.default.static(path_1.default.join(__dirname, '../dist')));
 app.use((req, res) => {
     res.sendFile(path_1.default.join(__dirname, '../dist/index.html'));
 });
+const cronJobs_1 = require("./utils/cronJobs");
 // Start Server
 app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
+    (0, cronJobs_1.initCronJobs)();
+    console.log('Cron jobs initialized');
 });
 //# sourceMappingURL=index.js.map

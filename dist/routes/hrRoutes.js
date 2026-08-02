@@ -1,8 +1,12 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const router = (0, express_1.Router)();
 // Get attendances
 router.get('/attendance', authMiddleware_1.authenticate, async (req, res) => {
@@ -186,6 +190,36 @@ router.get('/staff-salary', authMiddleware_1.authenticate, async (req, res) => {
     catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Server error fetching staff salary' });
+    }
+});
+// Update staff
+router.put('/staff/:id', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { name, staffId, role, department, password } = req.body;
+        // Check if user exists
+        const user = await index_1.prisma.user.findUnique({ where: { id } });
+        if (!user) {
+            return res.status(404).json({ message: 'Staff member not found' });
+        }
+        const dataToUpdate = {
+            name,
+            staffId: staffId && staffId.trim() !== '' ? staffId : null,
+            role,
+            department
+        };
+        if (password && password.trim() !== '') {
+            dataToUpdate.password = await bcryptjs_1.default.hash(password, 10);
+        }
+        const updatedUser = await index_1.prisma.user.update({
+            where: { id },
+            data: dataToUpdate
+        });
+        res.json({ message: 'Staff member updated successfully', user: { id: updatedUser.id, name: updatedUser.name } });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error updating staff' });
     }
 });
 // Delete staff

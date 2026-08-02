@@ -116,8 +116,42 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
         ...(additionalCosts !== undefined ? { additionalCosts } : {}),
         totalCost,
         finalAmount: totalCost,
+      },
+      include: {
+        project: {
+          include: { slabs: true }
+        }
       }
     });
+
+    // Auto-generate Slabs if project is already an active work order and has no slabs
+    const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
+    console.log('Quotation Update Check:', { 
+      status: updated.project?.status, 
+      isActive: updated.project?.status ? activeStatuses.includes(updated.project.status) : false,
+      slabsLength: updated.project?.slabs?.length,
+      hasProducts: !!updated.products
+    });
+
+    if (updated.project?.status && activeStatuses.includes(updated.project.status) && updated.project.slabs.length === 0 && updated.products) {
+      console.log('Generating slabs...');
+      const productsList = updated.products as any[];
+      for (const prod of productsList) {
+        const qty = Number(prod.qty) || 1;
+        for (let i = 1; i <= qty; i++) {
+          const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
+          const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
+          await prisma.slab.create({
+            data: {
+              projectId: updated.projectId,
+              name: pieceName,
+              size: sizeStr,
+              status: 'pending'
+            }
+          });
+        }
+      }
+    }
 
     res.json(updated);
   } catch (error) {
