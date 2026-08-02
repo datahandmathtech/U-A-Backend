@@ -42,31 +42,36 @@ import slabRoutes from './routes/slabRoutes';
 import vendorRoutes from './routes/vendorRoutes';
 
 // Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadRoutes);
-app.use('/api/projects', projectRoutes);
-app.use('/api/designs', designRoutes);
-app.use('/api/quotations', quotationRoutes);
-app.use('/api/invoices', invoiceRoutes);
-app.use('/api/inventory', inventoryRoutes);
-app.use('/api/machines', machineRoutes);
-app.use('/api/production', productionRoutes);
-app.use('/api/categories', categoryRoutes);
-app.use('/api/units', unitRoutes);
-app.use('/api/dispatch', dispatchRoutes);
-app.use('/api/hr', hrRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/qa', qaRoutes);
-app.use('/api/labor', laborRoutes);
-app.use('/api/machine-logs', machineLogRoutes);
-app.use('/api/expenses', expenseRoutes);
-app.use('/api/slabs', slabRoutes);
-app.use('/api/electricity', electricityRoutes);
-app.use('/api/closure', closureRoutes);
-app.use('/api/live-feed', liveFeedRoutes);
-app.use('/api/upload', uploadRoutes);
-app.use('/api/drawings', drawingRoutes);
-app.use('/api/vendors', vendorRoutes);
+const mountRoutes = (prefix = '') => {
+  app.use(`${prefix}/auth`, authRoutes);
+  app.use(`${prefix}/leads`, leadRoutes);
+  app.use(`${prefix}/projects`, projectRoutes);
+  app.use(`${prefix}/designs`, designRoutes);
+  app.use(`${prefix}/quotations`, quotationRoutes);
+  app.use(`${prefix}/invoices`, invoiceRoutes);
+  app.use(`${prefix}/inventory`, inventoryRoutes);
+  app.use(`${prefix}/machines`, machineRoutes);
+  app.use(`${prefix}/production`, productionRoutes);
+  app.use(`${prefix}/categories`, categoryRoutes);
+  app.use(`${prefix}/units`, unitRoutes);
+  app.use(`${prefix}/dispatch`, dispatchRoutes);
+  app.use(`${prefix}/hr`, hrRoutes);
+  app.use(`${prefix}/dashboard`, dashboardRoutes);
+  app.use(`${prefix}/qa`, qaRoutes);
+  app.use(`${prefix}/labor`, laborRoutes);
+  app.use(`${prefix}/machine-logs`, machineLogRoutes);
+  app.use(`${prefix}/expenses`, expenseRoutes);
+  app.use(`${prefix}/slabs`, slabRoutes);
+  app.use(`${prefix}/electricity`, electricityRoutes);
+  app.use(`${prefix}/closure`, closureRoutes);
+  app.use(`${prefix}/live-feed`, liveFeedRoutes);
+  app.use(`${prefix}/upload`, uploadRoutes);
+  app.use(`${prefix}/drawings`, drawingRoutes);
+  app.use(`${prefix}/vendors`, vendorRoutes);
+};
+
+mountRoutes('/api');
+mountRoutes(''); // Support proxies that strip the /api prefix
 
 // Basic Route
 app.get('/api/health', async (req, res) => {
@@ -89,9 +94,13 @@ app.get('/api/health', async (req, res) => {
 // Serve static files from the frontend dist folder
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// Catch-all route to serve the frontend app (Express 5 safe)
+// Catch-all route
 app.use((req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+  if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
+    res.status(404).json({ error: 'API endpoint not found: ' + req.path });
+  } else {
+    res.status(404).send('Not Found');
+  }
 });
 
 import { initCronJobs } from './utils/cronJobs';
