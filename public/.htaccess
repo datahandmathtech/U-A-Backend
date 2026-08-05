@@ -1,0 +1,14 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # 1. Proxy API requests to local Node.js backend (Port 5000)
+  RewriteRule ^api/(.*)$ http://127.0.0.1:5000/api/$1 [P,L]
+
+  # 2. React Router Catch-all fallback
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_FILENAME} !-l
+  RewriteRule . /index.html [L]
+</IfModule>
