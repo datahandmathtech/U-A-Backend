@@ -91,15 +91,22 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Serve static files from the frontend dist folder
-app.use(express.static(path.join(__dirname, '../dist')));
+import fs from 'fs';
+
+// Serve static files from the 'public' folder (you need to copy frontend dist here on live server)
+app.use(express.static(path.join(__dirname, '../public')));
 
 // Catch-all route
 app.use((req, res) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
     res.status(404).json({ error: 'API endpoint not found: ' + req.path });
   } else {
-    res.status(404).send('Not Found');
+    const indexPath = path.join(__dirname, '../public/index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
+    }
   }
 });
 

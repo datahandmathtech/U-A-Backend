@@ -43,31 +43,35 @@ const drawingRoutes_1 = __importDefault(require("./routes/drawingRoutes"));
 const slabRoutes_1 = __importDefault(require("./routes/slabRoutes"));
 const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
 // Routes
-app.use('/api/auth', authRoutes_1.default);
-app.use('/api/leads', leadRoutes_1.default);
-app.use('/api/projects', projectRoutes_1.default);
-app.use('/api/designs', designRoutes_1.default);
-app.use('/api/quotations', quotationRoutes_1.default);
-app.use('/api/invoices', invoiceRoutes_1.default);
-app.use('/api/inventory', inventoryRoutes_1.default);
-app.use('/api/machines', machineRoutes_1.default);
-app.use('/api/production', productionRoutes_1.default);
-app.use('/api/categories', categoryRoutes_1.default);
-app.use('/api/units', unitRoutes_1.default);
-app.use('/api/dispatch', dispatchRoutes_1.default);
-app.use('/api/hr', hrRoutes_1.default);
-app.use('/api/dashboard', dashboardRoutes_1.default);
-app.use('/api/qa', qaRoutes_1.default);
-app.use('/api/labor', laborRoutes_1.default);
-app.use('/api/machine-logs', machineLogRoutes_1.default);
-app.use('/api/expenses', expenseRoutes_1.default);
-app.use('/api/slabs', slabRoutes_1.default);
-app.use('/api/electricity', electricityRoutes_1.default);
-app.use('/api/closure', closureRoutes_1.default);
-app.use('/api/live-feed', liveFeedRoutes_1.default);
-app.use('/api/upload', uploadRoutes_1.default);
-app.use('/api/drawings', drawingRoutes_1.default);
-app.use('/api/vendors', vendorRoutes_1.default);
+const mountRoutes = (prefix = '') => {
+    app.use(`${prefix}/auth`, authRoutes_1.default);
+    app.use(`${prefix}/leads`, leadRoutes_1.default);
+    app.use(`${prefix}/projects`, projectRoutes_1.default);
+    app.use(`${prefix}/designs`, designRoutes_1.default);
+    app.use(`${prefix}/quotations`, quotationRoutes_1.default);
+    app.use(`${prefix}/invoices`, invoiceRoutes_1.default);
+    app.use(`${prefix}/inventory`, inventoryRoutes_1.default);
+    app.use(`${prefix}/machines`, machineRoutes_1.default);
+    app.use(`${prefix}/production`, productionRoutes_1.default);
+    app.use(`${prefix}/categories`, categoryRoutes_1.default);
+    app.use(`${prefix}/units`, unitRoutes_1.default);
+    app.use(`${prefix}/dispatch`, dispatchRoutes_1.default);
+    app.use(`${prefix}/hr`, hrRoutes_1.default);
+    app.use(`${prefix}/dashboard`, dashboardRoutes_1.default);
+    app.use(`${prefix}/qa`, qaRoutes_1.default);
+    app.use(`${prefix}/labor`, laborRoutes_1.default);
+    app.use(`${prefix}/machine-logs`, machineLogRoutes_1.default);
+    app.use(`${prefix}/expenses`, expenseRoutes_1.default);
+    app.use(`${prefix}/slabs`, slabRoutes_1.default);
+    app.use(`${prefix}/electricity`, electricityRoutes_1.default);
+    app.use(`${prefix}/closure`, closureRoutes_1.default);
+    app.use(`${prefix}/live-feed`, liveFeedRoutes_1.default);
+    app.use(`${prefix}/upload`, uploadRoutes_1.default);
+    app.use(`${prefix}/drawings`, drawingRoutes_1.default);
+    app.use(`${prefix}/vendors`, vendorRoutes_1.default);
+};
+mountRoutes('/api');
+mountRoutes(''); // Support proxies that strip the /api prefix
 // Basic Route
 app.get('/api/health', async (req, res) => {
     try {
@@ -86,11 +90,23 @@ app.get('/api/health', async (req, res) => {
         });
     }
 });
-// Serve static files from the frontend dist folder
-app.use(express_1.default.static(path_1.default.join(__dirname, '../dist')));
-// Catch-all route to serve the frontend app (Express 5 safe)
+const fs_1 = __importDefault(require("fs"));
+// Serve static files from the 'public' folder (you need to copy frontend dist here on live server)
+app.use(express_1.default.static(path_1.default.join(__dirname, '../public')));
+// Catch-all route
 app.use((req, res) => {
-    res.sendFile(path_1.default.join(__dirname, '../dist/index.html'));
+    if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
+        res.status(404).json({ error: 'API endpoint not found: ' + req.path });
+    }
+    else {
+        const indexPath = path_1.default.join(__dirname, '../public/index.html');
+        if (fs_1.default.existsSync(indexPath)) {
+            res.sendFile(indexPath);
+        }
+        else {
+            res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
+        }
+    }
 });
 const cronJobs_1 = require("./utils/cronJobs");
 // Start Server
