@@ -321,10 +321,11 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                     });
                     if (split.pieceIds && split.pieceIds.length > 0) {
                         for (const pieceId of split.pieceIds) {
+                            const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
                             await index_1.prisma.piece.update({
                                 where: { id: pieceId },
                                 data: {
-                                    status: 'completed',
+                                    status: pieceStatus,
                                     ...(split.stage && { stage: split.stage })
                                 }
                             });
@@ -332,11 +333,11 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                                 data: {
                                     pieceId: pieceId,
                                     stage: originalLog.stage,
-                                    status: 'completed',
+                                    status: pieceStatus,
                                     operatorId: originalLog.workerId,
                                     remarks: 'Auto-logged from Material/Machine Approval',
                                     vehicleNumber: originalLog.vehicleNumber || undefined,
-                                    endTime: new Date()
+                                    endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
                                 }
                             });
                         }
@@ -377,10 +378,11 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 for (const split of splits) {
                     if (split.pieceIds && split.pieceIds.length > 0) {
                         for (const pieceId of split.pieceIds) {
+                            const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
                             await index_1.prisma.piece.update({
                                 where: { id: pieceId },
                                 data: {
-                                    status: 'completed',
+                                    status: pieceStatus,
                                     stage: originalLog.stage.replace(' Work', '')
                                 }
                             });
@@ -388,11 +390,11 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                                 data: {
                                     pieceId: pieceId,
                                     stage: originalLog.stage,
-                                    status: 'completed',
+                                    status: pieceStatus,
                                     operatorId: originalLog.workerId,
                                     remarks: 'Auto-logged from Material/Machine Approval',
                                     vehicleNumber: originalLog.vehicleNumber || undefined,
-                                    endTime: new Date()
+                                    endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
                                 }
                             });
                         }

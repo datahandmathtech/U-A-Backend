@@ -173,8 +173,15 @@ model Quotation {
   products         Json?
   additionalCosts  Json?
   status           String   @default("draft") // draft, sent, approved, rejected
+  terms            String[] @default([])
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+model QuotationTerm {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  text      String   @unique
+  createdAt DateTime @default(now())
 }
 
 model Invoice {
