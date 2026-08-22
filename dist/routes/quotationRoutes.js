@@ -18,10 +18,40 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         res.status(500).json({ message: 'Server error fetching quotations' });
     }
 });
+// Get all saved quotation terms
+router.get('/terms', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const terms = await index_1.prisma.quotationTerm.findMany({
+            orderBy: { createdAt: 'desc' }
+        });
+        res.json(terms);
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Server error fetching quotation terms' });
+    }
+});
+// Add a new quotation term
+router.post('/terms', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { text } = req.body;
+        if (!text)
+            return res.status(400).json({ message: 'Text is required' });
+        // Upsert or just create, ignoring if it exists
+        const term = await index_1.prisma.quotationTerm.upsert({
+            where: { text },
+            update: {},
+            create: { text }
+        });
+        res.json(term);
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Server error adding quotation term' });
+    }
+});
 // Create Quotation
 router.post('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { projectId, marginPercentage, products, additionalCosts } = req.body;
+        const { projectId, marginPercentage, products, additionalCosts, terms } = req.body;
         // Calculate products total if available
         const productsTotal = products && Array.isArray(products)
             ? products.reduce((sum, p) => sum + Number(p.amount || 0), 0)
@@ -78,6 +108,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 finalAmount,
                 products: products || [],
                 additionalCosts: additionalCosts || {},
+                terms: terms || [],
                 status: 'draft'
             }
         });
@@ -91,7 +122,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const { products, additionalCosts } = req.body;
+        const { products, additionalCosts, terms } = req.body;
         const productsTotal = products && Array.isArray(products)
             ? products.reduce((sum, p) => sum + Number(p.amount || 0), 0)
             : 0;
@@ -112,6 +143,7 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
             data: {
                 products: products || [],
                 ...(additionalCosts !== undefined ? { additionalCosts } : {}),
+                ...(terms !== undefined ? { terms } : {}),
                 totalCost,
                 finalAmount: totalCost,
             },

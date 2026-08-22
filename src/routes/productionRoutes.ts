@@ -175,7 +175,30 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
       }
     });
 
-    const activeOutLogs = allApprovedOutLogs.filter(log => log.isReturned !== true);
+    const pendingInLogs = await prisma.productionLog.findMany({
+      where: {
+        transactionType: 'IN',
+        approvalStatus: { in: ['pending', 'redo_in_progress'] },
+        parentLogId: { not: null }
+      }
+    });
+
+    // Subtract pending quantities
+    const activeOutLogs = allApprovedOutLogs.filter(log => {
+      if (log.isReturned === true) return false;
+      
+      const pendingReturns = pendingInLogs
+        .filter(inLog => inLog.parentLogId === log.id)
+        .reduce((sum, inLog) => sum + (inLog.quantityProduced || 0), 0);
+        
+      const availableQty = (log.quantityProduced || 0) - (log.returnedQty || 0) - pendingReturns;
+      
+      // Mutate log.returnedQty temporarily so frontend calculates remaining correctly
+      (log as any).returnedQty = (log.returnedQty || 0) + pendingReturns;
+      
+      return availableQty > 0;
+    });
+
     res.json(activeOutLogs);
   } catch (error) {
     console.error("Error fetching active OUT logs:", error);
@@ -183,18 +206,45 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
   }
 });
 
+// Fetch rejected logs for Manager Dashboard
+router.get('/rejected-logs', authenticate, async (req, res) => {
+  try {
+    const rejectedLogs = await prisma.productionLog.findMany({
+      where: { approvalStatus: { in: ['rejected_admin', 'redo_in_progress'] } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        worker: { select: { name: true, staffId: true } },
+        project: { select: { name: true, projectId: true } }
+      }
+    });
+    res.json(rejectedLogs);
+  } catch (error) {
+    console.error("Error fetching rejected logs:", error);
+    res.status(500).json({ message: 'Server error fetching rejected logs' });
+  }
+});
+
 // Submit new Material IN/OUT log
 router.post('/material-log', authenticate, async (req, res) => {
   try {
-    const { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds } = req.body;
+    let { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds, requiresMachine } = req.body;
     
+    // If manager submits an OUT log but says no machine required, 
+    // it skips the worker and acts as a direct piece completion (IN log)
+    if (transactionType === 'OUT' && requiresMachine === false) {
+      transactionType = 'IN';
+    }
+
     let projectId = undefined;
     if (parentLogId) {
       const parentLog = await prisma.productionLog.findUnique({
         where: { id: parentLogId }
       });
-      if (parentLog && parentLog.projectId) {
-        projectId = parentLog.projectId;
+      if (parentLog) {
+        projectId = parentLog.projectId || undefined;
+        productName = parentLog.productName || productName;
+        productId = parentLog.productId || productId;
+        slabId = parentLog.slabId || slabId;
       }
     } else {
       projectId = req.body.projectId;
@@ -219,7 +269,7 @@ router.post('/material-log', authenticate, async (req, res) => {
             productName: productName?.trim() || undefined,
             slabId: slabId?.trim() || undefined,
             pieceIds: v.pieceIds || pieceIds || [],
-            approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+            approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
             returnedQty: 0
@@ -247,7 +297,7 @@ router.post('/material-log', authenticate, async (req, res) => {
         productName: productName?.trim() || undefined,
         slabId: slabId?.trim() || undefined,
         pieceIds: pieceIds || [],
-        approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+        approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
         status: 'completed',
         isReturned: false,
         returnedQty: 0
@@ -310,7 +360,7 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
 router.patch('/:id/approve', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { approvalStatus, projectId, splits } = req.body; // approvalStatus: 'approved' or 'rejected'
+    const { approvalStatus, projectId, splits, remarks } = req.body; // approvalStatus: 'approved' or 'rejected'
 
     const originalLog = await prisma.productionLog.findUnique({ where: { id: String(id) } });
     if (!originalLog) return res.status(404).json({ message: 'Log not found' });
@@ -340,7 +390,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
               productName: split.productName ? String(split.productName) : undefined,
               slabId: split.slabId ? String(split.slabId) : undefined,
               pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
-              quantityProduced: Number(split.qty)
+              quantityProduced: Number(split.qty),
+              remarks: remarks ? String(remarks) : originalLog.remarks
             }
           });
           
@@ -381,7 +432,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
             productName: firstSplit.productName ? String(firstSplit.productName) : undefined,
             slabId: firstSplit.slabId ? String(firstSplit.slabId) : undefined,
             pieceIds: firstSplit.pieceIds && firstSplit.pieceIds.length > 0 ? firstSplit.pieceIds : [],
-            quantityProduced: Number(firstSplit.qty)
+            quantityProduced: Number(firstSplit.qty),
+            remarks: remarks ? String(remarks) : undefined
           }
         });
         
@@ -396,7 +448,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
               productName: split.productName ? String(split.productName) : undefined,
               slabId: split.slabId ? String(split.slabId) : undefined,
               pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
-              quantityProduced: Number(split.qty)
+              quantityProduced: Number(split.qty),
+              remarks: remarks ? String(remarks) : undefined
             }
           });
         }
@@ -482,7 +535,10 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
         where: { id: String(id) },
         data: {
           approvalStatus,
-          projectId: projectId ? String(projectId) : undefined
+          projectId: projectId ? String(projectId) : undefined,
+          remarks: remarks !== undefined ? String(remarks) : undefined,
+          ...(req.body.machineId && { machineId: req.body.machineId }),
+          ...(req.body.startPhotos && { startPhotos: req.body.startPhotos })
         }
       });
     }

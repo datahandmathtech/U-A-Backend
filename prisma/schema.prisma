@@ -460,17 +460,18 @@ model ProjectClosure {
 }
 
 model Slab {
-  id          String     @id @default(auto()) @map("_id") @db.ObjectId
-  projectId   String     @db.ObjectId
-  project     Project    @relation(fields: [projectId], references: [id])
-  inventoryId String?    @db.ObjectId
-  inventory   Inventory? @relation(fields: [inventoryId], references: [id])
-  name        String
-  size        String?
-  cost        Float      @default(0)
-  status      String     @default("active")
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id             String     @id @default(auto()) @map("_id") @db.ObjectId
+  projectId      String     @db.ObjectId
+  project        Project    @relation(fields: [projectId], references: [id])
+  inventoryId    String?    @db.ObjectId
+  inventory      Inventory? @relation(fields: [inventoryId], references: [id])
+  name           String
+  size           String?
+  cost           Float      @default(0)
+  status         String     @default("active")
+  requiredStages String[]   @default(["Production", "Polishing", "Packing", "Dispatch"])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
 
   pieces Piece[]
 }
@@ -510,8 +511,10 @@ model PieceLog {
   vendor        Vendor?   @relation(fields: [vendorId], references: [id])
   vehicleNumber String?
   startPhotoUrl String?
-  endPhotoUrl   String?
-  remarks       String?
+  endPhotoUrl     String?
+  requiresMachine Boolean   @default(true)
+  managerRemarks  String?
+  remarks         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 }

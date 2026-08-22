@@ -38,20 +38,41 @@ router.get('/', async (req, res) => {
         const vendorStats = vendors.map((vendor) => {
             const logs = allLogs.filter(log => log.vendorId === vendor.id);
             let filteredLogs = logs;
+            let pastLogs = [];
+            let openingBalance = 0;
             if (month && month !== 'All' && month !== 'undefined') {
+                const monthFilterIndex = logs.findIndex(l => {
+                    const d = new Date(l.createdAt);
+                    const monthStr = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
+                    return monthStr === month;
+                });
                 filteredLogs = logs.filter((log) => {
                     const d = new Date(log.createdAt);
                     const monthStr = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
                     return monthStr === month;
                 });
+                // Determine chronological start of the selected month to find past logs
+                const selectedMonthParts = String(month).split(' ');
+                const monthMap = { 'January': 0, 'February': 1, 'March': 2, 'April': 3, 'May': 4, 'June': 5, 'July': 6, 'August': 7, 'September': 8, 'October': 9, 'November': 10, 'December': 11 };
+                const monthName = selectedMonthParts[0] || '';
+                const monthNum = monthMap[monthName];
+                const yearNum = parseInt(selectedMonthParts[1] || '0');
+                if (monthNum !== undefined && yearNum) {
+                    const startOfSelectedMonth = new Date(yearNum, monthNum, 1);
+                    pastLogs = logs.filter(log => new Date(log.createdAt) < startOfSelectedMonth);
+                    const pastOut = pastLogs.reduce((acc, log) => acc + (log.transactionType === 'OUT' ? (log.quantityProduced || 0) : 0), 0);
+                    const pastIn = pastLogs.reduce((acc, log) => acc + (log.transactionType === 'IN' ? (log.quantityProduced || 0) : 0), 0);
+                    openingBalance = pastOut - pastIn;
+                }
             }
             const totalOut = filteredLogs.reduce((acc, log) => acc + (log.transactionType === 'OUT' ? (log.quantityProduced || 0) : 0), 0);
             const totalIn = filteredLogs.reduce((acc, log) => acc + (log.transactionType === 'IN' ? (log.quantityProduced || 0) : 0), 0);
             return {
                 ...vendor,
+                openingBalance,
                 totalOut,
                 totalIn,
-                balance: totalOut - totalIn
+                balance: openingBalance + totalOut - totalIn
             };
         });
         res.json(vendorStats);

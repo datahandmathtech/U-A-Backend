@@ -150,6 +150,34 @@ router.get('/attendance/active', authenticate, async (req, res) => {
   }
 });
 
+// Admin Manual Attendance Entry
+router.post('/attendance/manual', authenticate, async (req, res) => {
+  try {
+    const { userId, checkIn, checkOut, date } = req.body;
+    
+    // Validate inputs
+    if (!userId || !checkIn) {
+      return res.status(400).json({ message: 'User and Check-In time are required' });
+    }
+
+    const newRecord = await prisma.attendance.create({
+      data: {
+        userId,
+        date: date ? new Date(date) : new Date(checkIn),
+        checkIn: new Date(checkIn),
+        checkOut: checkOut ? new Date(checkOut) : null,
+        status: 'present',
+        gpsLocation: 'Manual Admin Entry'
+      }
+    });
+    
+    res.status(201).json(newRecord);
+  } catch (error) { 
+    console.error(error);
+    res.status(500).json({ message: 'Server error creating manual attendance' });
+  }
+});
+
 // Get staff salary calculation
 router.get('/staff-salary', authenticate, async (req, res) => {
   try {

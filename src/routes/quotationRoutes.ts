@@ -18,11 +18,41 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
   }
 });
 
+// Get all saved quotation terms
+router.get('/terms', authenticate, async (req, res) => {
+  try {
+    const terms = await prisma.quotationTerm.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(terms);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error fetching quotation terms' });
+  }
+});
+
+// Add a new quotation term
+router.post('/terms', authenticate, async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ message: 'Text is required' });
+    
+    // Upsert or just create, ignoring if it exists
+    const term = await prisma.quotationTerm.upsert({
+      where: { text },
+      update: {},
+      create: { text }
+    });
+    res.json(term);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error adding quotation term' });
+  }
+});
+
 // Create Quotation
 router.post('/', authenticate, async (req, res) => {
   try {
     const { 
-      projectId, marginPercentage, products, additionalCosts
+      projectId, marginPercentage, products, additionalCosts, terms
     } = req.body;
     
     // Calculate products total if available
@@ -77,6 +107,7 @@ router.post('/', authenticate, async (req, res) => {
         finalAmount,
         products: products || [],
         additionalCosts: additionalCosts || {},
+        terms: terms || [],
         status: 'draft'
       }
     });
@@ -91,7 +122,7 @@ router.post('/', authenticate, async (req, res) => {
 router.patch('/:id', authenticate, async (req: any, res: any) => {
   try {
     const { id } = req.params;
-    const { products, additionalCosts } = req.body;
+    const { products, additionalCosts, terms } = req.body;
 
     const productsTotal = products && Array.isArray(products)
       ? products.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0)
@@ -114,6 +145,7 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
       data: {
         products: products || [],
         ...(additionalCosts !== undefined ? { additionalCosts } : {}),
+        ...(terms !== undefined ? { terms } : {}),
         totalCost,
         finalAmount: totalCost,
       },
