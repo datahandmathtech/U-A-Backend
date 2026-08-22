@@ -12,6 +12,7 @@ router.get('/', async (req, res) => {
     try {
         const { month, fy } = req.query;
         const vendors = await prisma.vendor.findMany({
+            where: { status: 'active' },
             orderBy: { createdAt: 'desc' }
         });
         const today = new Date();
@@ -156,11 +157,14 @@ router.put('/:id', async (req, res) => {
         res.status(500).json({ error: 'Failed to update vendor' });
     }
 });
-// Delete vendor
+// Delete (soft delete) vendor
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await prisma.vendor.delete({ where: { id } });
+        await prisma.vendor.update({
+            where: { id },
+            data: { status: 'inactive' }
+        });
         res.json({ success: true });
     }
     catch (error) {

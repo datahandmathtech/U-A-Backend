@@ -153,7 +153,11 @@ router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) =
         const allApprovedOutLogs = await index_1.prisma.productionLog.findMany({
             where: {
                 transactionType: 'OUT',
-                approvalStatus: 'approved'
+                approvalStatus: 'approved',
+                OR: [
+                    { isReturned: false },
+                    { isReturned: null }
+                ]
             },
             orderBy: { createdAt: 'desc' },
             include: {
@@ -161,7 +165,23 @@ router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) =
                 project: { select: { name: true, projectId: true } }
             }
         });
-        const activeOutLogs = allApprovedOutLogs.filter(log => log.isReturned !== true);
+        const pendingInLogs = await index_1.prisma.productionLog.findMany({
+            where: {
+                transactionType: 'IN',
+                approvalStatus: { in: ['pending', 'redo_in_progress'] },
+                parentLogId: { not: null }
+            }
+        });
+        // Subtract pending quantities
+        const activeOutLogs = allApprovedOutLogs.filter(log => {
+            const pendingReturns = pendingInLogs
+                .filter(inLog => inLog.parentLogId === log.id)
+                .reduce((sum, inLog) => sum + (inLog.quantityProduced || 0), 0);
+            const availableQty = (log.quantityProduced || 0) - (log.returnedQty || 0) - pendingReturns;
+            // Mutate log.returnedQty temporarily so frontend calculates remaining correctly
+            log.returnedQty = (log.returnedQty || 0) + pendingReturns;
+            return availableQty > 0;
+        });
         res.json(activeOutLogs);
     }
     catch (error) {
@@ -173,7 +193,7 @@ router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) =
 router.get('/rejected-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const rejectedLogs = await index_1.prisma.productionLog.findMany({
-            where: { approvalStatus: 'rejected_admin' },
+            where: { approvalStatus: { in: ['rejected_admin', 'redo_in_progress'] } },
             orderBy: { createdAt: 'desc' },
             include: {
                 worker: { select: { name: true, staffId: true } },
@@ -201,8 +221,11 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
             const parentLog = await index_1.prisma.productionLog.findUnique({
                 where: { id: parentLogId }
             });
-            if (parentLog && parentLog.projectId) {
-                projectId = parentLog.projectId;
+            if (parentLog) {
+                projectId = parentLog.projectId || undefined;
+                productName = parentLog.productName || productName;
+                productId = parentLog.productId || productId;
+                slabId = parentLog.slabId || slabId;
             }
         }
         else {
@@ -227,7 +250,7 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                         productName: productName?.trim() || undefined,
                         slabId: slabId?.trim() || undefined,
                         pieceIds: v.pieceIds || pieceIds || [],
-                        approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+                        approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
                         status: 'completed',
                         isReturned: false,
                         returnedQty: 0
@@ -254,7 +277,7 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                 productName: productName?.trim() || undefined,
                 slabId: slabId?.trim() || undefined,
                 pieceIds: pieceIds || [],
-                approvalStatus: req.body.source === 'admin_manual' ? 'approved' : 'pending',
+                approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
                 status: 'completed',
                 isReturned: false,
                 returnedQty: 0
@@ -479,7 +502,9 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 data: {
                     approvalStatus,
                     projectId: projectId ? String(projectId) : undefined,
-                    remarks: remarks ? String(remarks) : undefined
+                    remarks: remarks !== undefined ? String(remarks) : undefined,
+                    ...(req.body.machineId && { machineId: req.body.machineId }),
+                    ...(req.body.startPhotos && { startPhotos: req.body.startPhotos })
                 }
             });
         }
