@@ -166,7 +166,11 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
     const allApprovedOutLogs = await prisma.productionLog.findMany({
       where: {
         transactionType: 'OUT',
-        approvalStatus: 'approved'
+        approvalStatus: 'approved',
+        OR: [
+          { isReturned: false },
+          { isReturned: null }
+        ]
       },
       orderBy: { createdAt: 'desc' },
       include: {
@@ -185,8 +189,6 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
 
     // Subtract pending quantities
     const activeOutLogs = allApprovedOutLogs.filter(log => {
-      if (log.isReturned === true) return false;
-      
       const pendingReturns = pendingInLogs
         .filter(inLog => inLog.parentLogId === log.id)
         .reduce((sum, inLog) => sum + (inLog.quantityProduced || 0), 0);
