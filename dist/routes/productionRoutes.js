@@ -626,4 +626,22 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     }
 });
 exports.default = router;
+/ /;
+f;
+o;
+r;
+c;
+e;
+d;
+u;
+p;
+d;
+a;
+t;
+e;
+f;
+o;
+r;
+U;
+I;
 //# sourceMappingURL=productionRoutes.js.map
