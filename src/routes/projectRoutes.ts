@@ -159,9 +159,13 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
     if (!project) return res.status(404).json({ message: 'Project not found' });
 
     if (project.quotations.length > 0) {
-      // Delete existing slabs, pieces, and pieceLogs first
-      const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true } });
+      // Fetch existing slabs to preserve their requiredStages
+      const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true, name: true, requiredStages: true } });
       const slabIds = slabs.map(s => s.id);
+      const existingStagesMap = new Map<string, string[]>();
+      slabs.forEach(s => {
+        existingStagesMap.set(s.name, s.requiredStages as string[]);
+      });
       
       const pieces = await prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
       const pieceIds = pieces.map(p => p.id);
@@ -180,12 +184,16 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
           for (let i = 1; i <= qty; i++) {
             const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
             const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
+            
+            const prevStages = existingStagesMap.get(pieceName);
+            
             await prisma.slab.create({
               data: {
                 projectId: project.id,
                 name: pieceName,
                 size: sizeStr,
-                status: 'pending'
+                status: 'pending',
+                ...(prevStages ? { requiredStages: prevStages } : {})
               }
             });
           }
