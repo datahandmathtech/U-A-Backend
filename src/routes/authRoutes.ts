@@ -1,9 +1,11 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../index';
 
 const router = Router();
+
+router.get('/ping', (req, res) => res.json({ status: 'pong', message: 'Backend is alive and responding instantly.' }));
 
 // Register a new user
 router.post('/register', async (req, res) => {
@@ -49,8 +51,9 @@ router.post('/register', async (req, res) => {
 // Login
 router.post('/login', async (req, res) => {
   try {
-    // emailOrStaffId can be an email or a staffId
     const { email: emailOrStaffId, password } = req.body;
+    
+    console.log('Login attempt for:', emailOrStaffId);
 
     const user = await prisma.user.findFirst({
       where: {
@@ -61,6 +64,9 @@ router.post('/login', async (req, res) => {
         ]
       }
     });
+    
+    console.log('User found:', user ? user.email : 'None');
+
     if (!user) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
@@ -85,8 +91,9 @@ router.post('/login', async (req, res) => {
         role: user.role,
       },
     });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+  } catch (error: any) {
+    console.error('Login Error:', error);
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 });
 

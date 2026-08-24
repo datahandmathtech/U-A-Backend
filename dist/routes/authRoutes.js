@@ -8,6 +8,7 @@ const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const index_1 = require("../index");
 const router = (0, express_1.Router)();
+router.get('/ping', (req, res) => res.json({ status: 'pong', message: 'Backend is alive and responding instantly.' }));
 // Register a new user
 router.post('/register', async (req, res) => {
     try {
@@ -47,8 +48,8 @@ router.post('/register', async (req, res) => {
 // Login
 router.post('/login', async (req, res) => {
     try {
-        // emailOrStaffId can be an email or a staffId
         const { email: emailOrStaffId, password } = req.body;
+        console.log('Login attempt for:', emailOrStaffId);
         const user = await index_1.prisma.user.findFirst({
             where: {
                 OR: [
@@ -58,6 +59,7 @@ router.post('/login', async (req, res) => {
                 ]
             }
         });
+        console.log('User found:', user ? user.email : 'None');
         if (!user) {
             return res.status(400).json({ message: 'Invalid credentials' });
         }
@@ -77,7 +79,8 @@ router.post('/login', async (req, res) => {
         });
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error' });
+        console.error('Login Error:', error);
+        res.status(500).json({ message: 'Server error: ' + error.message });
     }
 });
 exports.default = router;
