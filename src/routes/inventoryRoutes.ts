@@ -85,6 +85,7 @@ router.post('/', authenticate, async (req, res) => {
     
     res.status(201).json(newItem);
   } catch (error) {
+    console.error('Error creating inventory item:', error);
     res.status(500).json({ message: 'Server error creating inventory item' });
   }
 });
