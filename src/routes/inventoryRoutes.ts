@@ -4,41 +4,55 @@ import { authenticate } from '../middlewares/authMiddleware';
 
 const router = Router();
 
-// Get inventory items with monthly stats
+// Get inventory items with FY stats
 router.get('/', authenticate, async (req, res) => {
   try {
+    const { fyYear } = req.query;
+    
+    // Determine Financial Year start and end dates
+    const now = new Date();
+    let currentFyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const selectedFyYear = fyYear ? parseInt(fyYear as string, 10) : currentFyYear;
+    
+    const startOfFy = new Date(selectedFyYear, 3, 1); // April 1st
+    const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
+
     const inventory = await prisma.inventory.findMany({
       orderBy: { createdAt: 'desc' }
     });
     
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const [balances, logs] = await Promise.all([
-      prisma.dailyStockBalance.findMany({
-        where: { date: { gte: startOfMonth } },
-        orderBy: { date: 'asc' }
+    const [logsBeforeFy, logsDuringFy] = await Promise.all([
+      // Logs before the FY to calculate Opening Stock correctly from total quantity
+      // Actually, opening stock = current quantity - (net IN during FY + net IN after FY) + (net OUT during FY + net OUT after FY)
+      // Or simpler: opening stock = current quantity - net movement from start of FY to now.
+      prisma.inventoryLog.findMany({
+        where: { createdAt: { gte: startOfFy } }
       }),
       prisma.inventoryLog.findMany({
-        where: { createdAt: { gte: startOfMonth } }
+        where: { createdAt: { gte: startOfFy, lte: endOfFy } }
       })
     ]);
     
     const enrichedInventory = inventory.map(item => {
-      // Find the earliest balance for this month as opening stock
-      const itemBalances = balances.filter(b => b.inventoryId === item.id);
-      const openingStock = itemBalances.length > 0 ? itemBalances[0]!.openingQty : item.quantity;
+      // Calculate net change from start of FY to now
+      const logsFromStartOfFyToNow = logsBeforeFy.filter(l => l.inventoryId === item.id);
+      const inSinceStartOfFy = logsFromStartOfFyToNow.filter(l => l.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
+      const outSinceStartOfFy = logsFromStartOfFyToNow.filter(l => l.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
+      const netChangeSinceStartOfFy = inSinceStartOfFy - outSinceStartOfFy;
       
-      const itemLogs = logs.filter(l => l.inventoryId === item.id);
+      const openingStock = item.quantity - netChangeSinceStartOfFy;
+      
+      // Calculate IN and OUT during the selected FY
+      const itemLogs = logsDuringFy.filter(l => l.inventoryId === item.id);
       const inQty = itemLogs.filter(l => l.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
       const outQty = itemLogs.filter(l => l.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
       
       return {
         ...item,
         openingStock,
-        inCurrentMonth: inQty,
-        outCurrentMonth: outQty,
-        closingStock: item.quantity
+        inCurrentFY: inQty,
+        outCurrentFY: outQty,
+        closingStock: openingStock + inQty - outQty
       };
     });
 
