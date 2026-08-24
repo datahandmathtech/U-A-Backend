@@ -146,8 +146,21 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
         });
         if (!project)
             return res.status(404).json({ message: 'Project not found' });
-        const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
-        if (activeStatuses.includes(project.status) && project.slabs.length === 0 && project.quotations.length > 0) {
+        if (project.quotations.length > 0) {
+            // Fetch existing slabs to preserve their requiredStages
+            const slabs = await index_1.prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true, name: true, requiredStages: true } });
+            const slabIds = slabs.map(s => s.id);
+            const existingStagesMap = new Map();
+            slabs.forEach(s => {
+                existingStagesMap.set(s.name, s.requiredStages);
+            });
+            const pieces = await index_1.prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
+            const pieceIds = pieces.map(p => p.id);
+            await index_1.prisma.$transaction([
+                index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }),
+                index_1.prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }),
+                index_1.prisma.slab.deleteMany({ where: { projectId: String(id) } })
+            ]);
             const firstQuote = project.quotations[0];
             if (firstQuote && firstQuote.products) {
                 const products = firstQuote.products;
@@ -156,12 +169,14 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
                     for (let i = 1; i <= qty; i++) {
                         const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
                         const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
+                        const prevStages = existingStagesMap.get(pieceName);
                         await index_1.prisma.slab.create({
                             data: {
                                 projectId: project.id,
                                 name: pieceName,
                                 size: sizeStr,
-                                status: 'pending'
+                                status: 'pending',
+                                ...(prevStages ? { requiredStages: prevStages } : {})
                             }
                         });
                     }
