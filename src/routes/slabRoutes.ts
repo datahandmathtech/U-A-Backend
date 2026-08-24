@@ -140,12 +140,14 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, size, cost, requiredStages } = req.body;
+    const { name, size, cost, requiredStages, status } = req.body;
     
-    const updateData: any = { name, size, cost: Number(cost) || 0 };
-    if (requiredStages !== undefined) {
-      updateData.requiredStages = requiredStages;
-    }
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (size !== undefined) updateData.size = size;
+    if (cost !== undefined) updateData.cost = Number(cost) || 0;
+    if (requiredStages !== undefined) updateData.requiredStages = requiredStages;
+    if (status !== undefined) updateData.status = status;
 
     const updatedSlab = await prisma.slab.update({
       where: { id: String(id) },
