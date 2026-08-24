@@ -158,8 +158,20 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
 
     if (!project) return res.status(404).json({ message: 'Project not found' });
 
-    const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
-    if (activeStatuses.includes(project.status) && project.slabs.length === 0 && project.quotations.length > 0) {
+    if (project.quotations.length > 0) {
+      // Delete existing slabs, pieces, and pieceLogs first
+      const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true } });
+      const slabIds = slabs.map(s => s.id);
+      
+      const pieces = await prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
+      const pieceIds = pieces.map(p => p.id);
+      
+      await prisma.$transaction([
+        prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }),
+        prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }),
+        prisma.slab.deleteMany({ where: { projectId: String(id) } })
+      ]);
+
       const firstQuote = project.quotations[0];
       if (firstQuote && firstQuote.products) {
         const products = firstQuote.products as any[];
