@@ -67,7 +67,7 @@ router.post('/', authenticate, async (req, res) => {
         quantity: Number(quantity),
         unit,
         supplier,
-        costPerUnit: Number(costPerUnit)
+        costPerUnit: costPerUnit ? Number(costPerUnit) : 0
       }
     });
     
