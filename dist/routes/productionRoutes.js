@@ -448,6 +448,47 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                             });
                         }
                     }
+                    // Auto-deduct from Inventory for completed OUT items (or Production Work)
+                    if (originalLog.transactionType === 'OUT' || originalLog.stage === 'Production Work') {
+                        const materialNameToMatch = String(split.productName || originalLog.productName || '').toLowerCase();
+                        if (materialNameToMatch) {
+                            // Find matching inventory items
+                            const inventories = await index_1.prisma.inventory.findMany({});
+                            const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
+                                inv.itemName.toLowerCase().includes(materialNameToMatch));
+                            if (match) {
+                                const qtyToDeduct = Number(split.qty);
+                                if (qtyToDeduct > 0) {
+                                    await index_1.prisma.inventory.update({
+                                        where: { id: match.id },
+                                        data: { quantity: { decrement: qtyToDeduct } }
+                                    });
+                                    const proj = split.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(split.projectId) } }) : null;
+                                    // Update ProjectMaterial for Waste Ledger
+                                    if (split.projectId) {
+                                        const pm = await index_1.prisma.projectMaterial.findFirst({
+                                            where: { projectId: String(split.projectId), inventoryId: match.id, isConsumed: false }
+                                        });
+                                        if (pm) {
+                                            const waste = Math.max(0, pm.quantity - qtyToDeduct);
+                                            await index_1.prisma.projectMaterial.update({
+                                                where: { id: pm.id },
+                                                data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                            });
+                                        }
+                                    }
+                                    await index_1.prisma.inventoryLog.create({
+                                        data: {
+                                            inventoryId: match.id,
+                                            type: 'OUT',
+                                            quantity: qtyToDeduct,
+                                            remarks: `Used in Project: ${proj?.name || 'Unknown'}`
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // If this is an IN log, apply the returns to pending OUT logs (FIFO)
@@ -507,6 +548,46 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                     ...(req.body.startPhotos && { startPhotos: req.body.startPhotos })
                 }
             });
+            // Auto-deduct from Inventory for completed OUT items (or Production Work)
+            if (approvalStatus === 'approved' && (updatedLog.transactionType === 'OUT' || updatedLog.stage === 'Production Work')) {
+                const materialNameToMatch = String(updatedLog.productName || originalLog.productName || '').toLowerCase();
+                if (materialNameToMatch) {
+                    const inventories = await index_1.prisma.inventory.findMany({});
+                    const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
+                        inv.itemName.toLowerCase().includes(materialNameToMatch));
+                    if (match) {
+                        const qtyToDeduct = Number(updatedLog.quantityProduced);
+                        if (qtyToDeduct > 0) {
+                            await index_1.prisma.inventory.update({
+                                where: { id: match.id },
+                                data: { quantity: { decrement: qtyToDeduct } }
+                            });
+                            const proj = updatedLog.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(updatedLog.projectId) } }) : null;
+                            // Update ProjectMaterial for Waste Ledger
+                            if (updatedLog.projectId) {
+                                const pm = await index_1.prisma.projectMaterial.findFirst({
+                                    where: { projectId: String(updatedLog.projectId), inventoryId: match.id, isConsumed: false }
+                                });
+                                if (pm) {
+                                    const waste = Math.max(0, pm.quantity - qtyToDeduct);
+                                    await index_1.prisma.projectMaterial.update({
+                                        where: { id: pm.id },
+                                        data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                    });
+                                }
+                            }
+                            await index_1.prisma.inventoryLog.create({
+                                data: {
+                                    inventoryId: match.id,
+                                    type: 'OUT',
+                                    quantity: qtyToDeduct,
+                                    remarks: `Used in Project Approval: ${proj?.name || 'Unknown'}`
+                                }
+                            });
+                        }
+                    }
+                }
+            }
         }
         if (updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
             try {

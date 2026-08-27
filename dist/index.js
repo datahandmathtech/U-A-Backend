@@ -42,6 +42,7 @@ const uploadRoutes_1 = __importDefault(require("./routes/uploadRoutes"));
 const drawingRoutes_1 = __importDefault(require("./routes/drawingRoutes"));
 const slabRoutes_1 = __importDefault(require("./routes/slabRoutes"));
 const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
+const wasteRoutes_1 = __importDefault(require("./routes/wasteRoutes"));
 // Routes
 const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/auth`, authRoutes_1.default);
@@ -68,7 +69,9 @@ const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/live-feed`, liveFeedRoutes_1.default);
     app.use(`${prefix}/upload`, uploadRoutes_1.default);
     app.use(`${prefix}/drawings`, drawingRoutes_1.default);
+    app.use(`${prefix}/slabs`, slabRoutes_1.default);
     app.use(`${prefix}/vendors`, vendorRoutes_1.default);
+    app.use(`${prefix}/waste`, wasteRoutes_1.default);
 };
 mountRoutes('/api');
 mountRoutes(''); // Support proxies that strip the /api prefix

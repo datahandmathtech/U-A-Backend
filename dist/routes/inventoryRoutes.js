@@ -120,5 +120,34 @@ router.patch('/:id/stock', authMiddleware_1.authenticate, async (req, res) => {
         res.status(500).json({ message: 'Server error updating stock' });
     }
 });
+// Get logs by supplier
+router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { supplier } = req.params;
+        // Find all inventory items for this supplier
+        const inventoryItems = await index_1.prisma.inventory.findMany({
+            where: { supplier: String(supplier) },
+            select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true }
+        });
+        const inventoryIds = inventoryItems.map(i => i.id);
+        // Get all logs for those items
+        const logs = await index_1.prisma.inventoryLog.findMany({
+            where: { inventoryId: { in: inventoryIds } },
+            orderBy: { createdAt: 'desc' }
+        });
+        // Map logs to include inventory details
+        const logsWithDetails = logs.map(log => {
+            const item = inventoryItems.find(i => i.id === log.inventoryId);
+            return {
+                ...log,
+                inventory: item
+            };
+        });
+        res.json(logsWithDetails);
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Server error fetching logs' });
+    }
+});
 exports.default = router;
 //# sourceMappingURL=inventoryRoutes.js.map
