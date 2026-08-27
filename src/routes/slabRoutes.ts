@@ -95,6 +95,26 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
     const slab = await prisma.slab.findUnique({ where: { id: String(id) }, include: { pieces: true } });
     if (!slab) return res.status(404).json({ message: 'Slab not found' });
     
+    let projectMaterial = null;
+    let usedQuantity = 0;
+    
+    // Auto-match source material
+    const projectMaterials = await prisma.projectMaterial.findMany({
+      where: { projectId: slab.projectId, isConsumed: false },
+      include: { inventory: true }
+    });
+
+    if (projectMaterials.length > 0) {
+      // Try to match by name
+      let matched = projectMaterials.find(pm => 
+        slab.name.toLowerCase().includes(pm.inventory.itemName.toLowerCase()) || 
+        pm.inventory.itemName.toLowerCase().includes(slab.name.toLowerCase())
+      );
+      // Fallback to first available if no name match
+      if (!matched) matched = projectMaterials[0];
+      projectMaterial = matched;
+    }
+
     const currentMaxPieceNumber = (slab as any).pieces?.length > 0 
       ? Math.max(...(slab as any).pieces.map((p: any) => p.pieceNumber)) 
       : 0;
@@ -102,13 +122,31 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
     const piecesData = [];
     if (piecesArray && Array.isArray(piecesArray)) {
       for (let i = 0; i < piecesArray.length; i++) {
+        const l = Number(piecesArray[i].length) || 0;
+        const w = Number(piecesArray[i].width) || 0;
+        let pieceArea = 0;
+        // Assume length/width are in inches for piece creation, so sq ft = (L * W) / 144
+        // Or if they are already in sq ft, we need to know. Usually dimensions are inches.
+        // Let's just calculate L * W / 144 if L and W are > 0.
+        if (l > 0 && w > 0) {
+          pieceArea = (l * w) / 144;
+        }
+
+        if (piecesArray[i].name?.includes('(Full Slab)')) {
+           // If full slab, use the whole project material quantity
+           pieceArea = projectMaterial ? projectMaterial.quantity : pieceArea;
+        }
+        
+        usedQuantity += pieceArea;
+
         piecesData.push({
           slabId: String(id),
           pieceNumber: currentMaxPieceNumber + i + 1,
           productName: piecesArray[i].name || productName || slab.name,
           vendorName: vendorName || null,
           size: piecesArray[i].size || size || null,
-          stage: 'Production'
+          stage: 'Production',
+          sourceMaterialId: projectMaterial ? String(projectMaterial.id) : undefined
         });
       }
     } else {
@@ -119,12 +157,26 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
           productName: productName || slab.name,
           vendorName: vendorName || null,
           size: size || null,
-          stage: 'Production'
+          stage: 'Production',
+          sourceMaterialId: projectMaterial ? String(projectMaterial.id) : undefined
         });
       }
     }
     
     await prisma.piece.createMany({ data: piecesData });
+    
+    if (projectMaterial) {
+       const wasteQuantity = Math.max(0, projectMaterial.quantity - usedQuantity);
+       await prisma.projectMaterial.update({
+           where: { id: String(projectMaterial.id) },
+           data: {
+             isConsumed: true,
+             usedQuantity: usedQuantity,
+             wasteQuantity: wasteQuantity
+           }
+         });
+    }
+
     const newPieces = await prisma.piece.findMany({ 
       where: { slabId: String(id), pieceNumber: { gt: currentMaxPieceNumber } } 
     });

@@ -85,15 +85,20 @@ model Project {
   slabs          Slab[]
 }
 
-model ProjectMaterial {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  projectId   String    @db.ObjectId
-  project     Project   @relation(fields: [projectId], references: [id])
-  inventoryId String    @db.ObjectId
-  inventory   Inventory @relation(fields: [inventoryId], references: [id])
-  quantity    Float
-  cost        Float
-  addedAt     DateTime  @default(now())
+  model ProjectMaterial {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  projectId     String    @db.ObjectId
+  project       Project   @relation(fields: [projectId], references: [id])
+  inventoryId   String    @db.ObjectId
+  inventory     Inventory @relation(fields: [inventoryId], references: [id])
+  quantity      Float
+  cost          Float
+  isConsumed    Boolean   @default(false)
+  usedQuantity  Float?
+  wasteQuantity Float?
+  addedAt       DateTime  @default(now())
+
+  pieces        Piece[]
 }
 
 model Lead {
@@ -477,12 +482,14 @@ model Slab {
 }
 
 model Piece {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  slabId      String   @db.ObjectId
-  slab        Slab     @relation(fields: [slabId], references: [id])
-  pieceNumber Int
-  productName String?
-  vendorName  String?
+  id               String           @id @default(auto()) @map("_id") @db.ObjectId
+  slabId           String           @db.ObjectId
+  slab             Slab             @relation(fields: [slabId], references: [id])
+  sourceMaterialId String?          @db.ObjectId
+  sourceMaterial   ProjectMaterial? @relation(fields: [sourceMaterialId], references: [id])
+  pieceNumber      Int
+  productName      String?
+  vendorName       String?
   vendorId    String?  @db.ObjectId
   vendor      Vendor?  @relation(fields: [vendorId], references: [id])
   stage       String   @default("Production") // Production, Job Work, Packing, Dispatch

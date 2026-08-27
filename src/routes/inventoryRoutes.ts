@@ -135,4 +135,38 @@ router.patch('/:id/stock', authenticate, async (req, res) => {
   }
 });
 
+// Get logs by supplier
+router.get('/logs/:supplier', authenticate, async (req, res) => {
+  try {
+    const { supplier } = req.params;
+    
+    // Find all inventory items for this supplier
+    const inventoryItems = await prisma.inventory.findMany({
+      where: { supplier: String(supplier) },
+      select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true }
+    });
+
+    const inventoryIds = inventoryItems.map(i => i.id);
+
+    // Get all logs for those items
+    const logs = await prisma.inventoryLog.findMany({
+      where: { inventoryId: { in: inventoryIds } },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    // Map logs to include inventory details
+    const logsWithDetails = logs.map(log => {
+      const item = inventoryItems.find(i => i.id === log.inventoryId);
+      return {
+        ...log,
+        inventory: item
+      };
+    });
+
+    res.json(logsWithDetails);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error fetching logs' });
+  }
+});
+
 export default router;

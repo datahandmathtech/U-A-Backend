@@ -315,29 +315,46 @@ router.post('/:id/materials', authenticate, async (req, res) => {
     
     // Check inventory stock
     const inventory = await prisma.inventory.findUnique({ where: { id: inventoryId } });
-    if (!inventory || inventory.quantity < quantity) {
-      return res.status(400).json({ message: 'Not enough stock in inventory' });
+    if (!inventory) {
+      return res.status(400).json({ message: 'Inventory item not found' });
     }
 
-    // Deduct stock from inventory and add to project material inside a transaction
-    const [projectMaterial, updatedInventory] = await prisma.$transaction([
-      prisma.projectMaterial.create({
-        data: {
-          projectId: String(id),
-          inventoryId,
-          quantity: Number(quantity),
-          cost: Number(cost)
-        }
-      }),
-      prisma.inventory.update({
-        where: { id: inventoryId },
-        data: { quantity: inventory.quantity - Number(quantity) }
-      })
-    ]);
+    // Do not deduct stock from global inventory here. It gets deducted when the piece is Approved in production.
+    const projectMaterial = await prisma.projectMaterial.create({
+      data: {
+        projectId: String(id),
+        inventoryId,
+        quantity: Number(quantity),
+        cost: Number(cost)
+      }
+    });
     
     res.status(201).json(projectMaterial);
   } catch (error) {
     res.status(500).json({ message: 'Server error reserving material' });
+  }
+});
+
+// Delete reserved material from project
+router.delete('/:id/materials/:materialId', authenticate, async (req, res) => {
+  try {
+    const { materialId } = req.params;
+    
+    const pm = await prisma.projectMaterial.findUnique({ where: { id: String(materialId) } });
+    if (!pm) return res.status(404).json({ message: 'Material reservation not found' });
+    
+    const invId = pm.inventoryId;
+
+    await prisma.$transaction([
+      prisma.projectMaterial.delete({ where: { id: String(materialId) } }),
+      prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } }),
+      prisma.inventory.delete({ where: { id: invId } })
+    ]);
+    
+    res.json({ message: 'Material reservation and associated inventory deleted' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error deleting material reservation' });
   }
 });
 

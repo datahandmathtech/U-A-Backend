@@ -40,6 +40,7 @@ import uploadRoutes from './routes/uploadRoutes';
 import drawingRoutes from './routes/drawingRoutes';
 import slabRoutes from './routes/slabRoutes';
 import vendorRoutes from './routes/vendorRoutes';
+import wasteRoutes from './routes/wasteRoutes';
 
 // Routes
 const mountRoutes = (prefix = '') => {
@@ -67,7 +68,9 @@ const mountRoutes = (prefix = '') => {
   app.use(`${prefix}/live-feed`, liveFeedRoutes);
   app.use(`${prefix}/upload`, uploadRoutes);
   app.use(`${prefix}/drawings`, drawingRoutes);
+  app.use(`${prefix}/slabs`, slabRoutes);
   app.use(`${prefix}/vendors`, vendorRoutes);
+  app.use(`${prefix}/waste`, wasteRoutes);
 };
 
 mountRoutes('/api');
