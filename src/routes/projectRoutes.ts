@@ -166,7 +166,7 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
     if (project.quotations.length > 0) {
       const firstQuote = project.quotations[0];
       if (firstQuote && firstQuote.products) {
-        const products = firstQuote.products;
+        const products = firstQuote.products as any[];
         for (const prod of products) {
           const qty = Number(prod.qty) || 1;
           for (let i = 1; i <= qty; i++) {
@@ -213,57 +213,6 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
     res.json({ message: 'Synced new slabs.' });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server error syncing slabs' });
-  }
-});
-
-    if (!project) return res.status(404).json({ message: 'Project not found' });
-
-    if (project.quotations.length > 0) {
-      // Fetch existing slabs to preserve their requiredStages
-      const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true, name: true, requiredStages: true } });
-      const slabIds = slabs.map(s => s.id);
-      const existingStagesMap = new Map<string, string[]>();
-      slabs.forEach(s => {
-        existingStagesMap.set(s.name, s.requiredStages as string[]);
-      });
-      
-      const pieces = await prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
-      const pieceIds = pieces.map(p => p.id);
-      
-      await prisma.$transaction([
-        prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }),
-        prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }),
-        prisma.slab.deleteMany({ where: { projectId: String(id) } })
-      ]);
-
-      const firstQuote = project.quotations[0];
-      if (firstQuote && firstQuote.products) {
-        const products = firstQuote.products as any[];
-        for (const prod of products) {
-          const qty = Number(prod.qty) || 1;
-          for (let i = 1; i <= qty; i++) {
-            const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
-            const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
-            
-            const prevStages = existingStagesMap.get(pieceName);
-            
-            await prisma.slab.create({
-              data: {
-                projectId: project.id,
-                name: pieceName,
-                size: sizeStr,
-                status: 'pending',
-                ...(prevStages ? { requiredStages: prevStages } : {})
-              }
-            });
-          }
-        }
-      }
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error syncing slabs:', error);
     res.status(500).json({ message: 'Server error syncing slabs' });
   }
 });
