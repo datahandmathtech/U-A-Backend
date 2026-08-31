@@ -163,20 +163,6 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
                 }
             }
         }
-        const materials = await index_1.prisma.projectMaterial.findMany({
-            where: { projectId: String(id) },
-            include: { inventory: true }
-        });
-        for (const pm of materials) {
-            if (pm.inventory.type === 'slab' || pm.inventory.type === 'block') {
-                const typeName = pm.inventory.jobWorkType === 'client' ? 'Client' : 'Unnati';
-                const blockName = pm.inventory.type === 'block' ? 'Block' : 'Slab';
-                const idPart = pm.inventory.blockNumber || pm.id.substring(pm.id.length - 4);
-                const pieceName = typeName + ' ' + blockName + ': ' + pm.inventory.itemName + ' (ID: ' + idPart + ')';
-                const sizeStr = String(pm.inventory.length || 0) + 'L x ' + String(pm.inventory.width || 0) + 'W | ' + String(pm.inventory.thickness || 0) + 'MM';
-                desiredSlabs.push({ name: pieceName, size: sizeStr });
-            }
-        }
         let addedCount = 0;
         for (const desired of desiredSlabs) {
             if (!existingNames.has(desired.name)) {
