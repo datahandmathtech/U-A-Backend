@@ -4,6 +4,20 @@ import { authenticate } from '../middlewares/authMiddleware';
 
 const router = Router();
 
+
+// Get all distinct slab names
+router.get('/all-names', authenticate, async (req, res) => {
+  try {
+    const slabs = await prisma.slab.findMany({
+      select: { name: true },
+      distinct: ['name']
+    });
+    res.json(slabs.map((s: any) => s.name));
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching slab names', error });
+  }
+});
+
 // Get all pieces across all slabs
 router.get('/pieces', authenticate, async (req, res) => {
   try {
