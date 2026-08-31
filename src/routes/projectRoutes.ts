@@ -178,7 +178,44 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
       }
     }
 
+
+
+    let addedCount = 0;
+    for (const desired of desiredSlabs) {
+      if (!existingNames.has(desired.name)) {
+        await prisma.slab.create({
+          data: {
+            projectId: project.id,
+            name: desired.name,
+            size: desired.size,
+            status: 'pending'
+          }
+        });
+        existingNames.add(desired.name);
+        addedCount++;
+      }
+    }
+
+    res.json({ message: 'Synced new slabs.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error syncing slabs' });
+  }
+});
+
+// Update project (Status, workflow progression)
+router.patch('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
     
+    if (updateData.startDate) updateData.startDate = new Date(updateData.startDate);
+    if (updateData.deadline) updateData.deadline = new Date(updateData.deadline);
+
+    const updated = await prisma.project.update({
+      where: { id: String(id) },
+      data: updateData,
+      include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
     });
     
     // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
