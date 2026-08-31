@@ -95,7 +95,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 // Update stock (in/out)
 router.patch('/:id/stock', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = req.params.id;
         const { quantityChange, remarks } = req.body; // positive for IN, negative for OUT
         const item = await index_1.prisma.inventory.findUnique({ where: { id: String(id) } });
         if (!item)
@@ -147,6 +147,143 @@ router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) =>
     }
     catch (error) {
         res.status(500).json({ message: 'Server error fetching logs' });
+    }
+});
+// Manual deduct stock (and optional waste)
+router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { inventoryId, usedQuantity, wasteQuantity, projectName, date } = req.body;
+        const used = Number(usedQuantity) || 0;
+        const waste = Number(wasteQuantity) || 0;
+        const totalDeduct = used + waste;
+        if (!inventoryId || totalDeduct <= 0) {
+            return res.status(400).json({ message: 'Invalid quantities' });
+        }
+        const item = await index_1.prisma.inventory.findUnique({ where: { id: inventoryId } });
+        if (!item)
+            return res.status(404).json({ message: 'Item not found' });
+        // We allow deducting more than available if they really want, but let's check
+        if (item.quantity < totalDeduct) {
+            return res.status(400).json({ message: 'Not enough stock available' });
+        }
+        // Update inventory quantity
+        await index_1.prisma.inventory.update({
+            where: { id: inventoryId },
+            data: { quantity: item.quantity - totalDeduct }
+        });
+        const createdAt = date ? new Date(date) : new Date();
+        // Create OUT log for Used
+        if (used > 0) {
+            await index_1.prisma.inventoryLog.create({
+                data: {
+                    inventoryId: inventoryId,
+                    type: 'OUT',
+                    quantity: used,
+                    remarks: projectName ? `Project: ${projectName}` : 'Manual Deduction',
+                    createdAt: createdAt
+                }
+            });
+        }
+        // Create OUT log for Waste
+        if (waste > 0) {
+            await index_1.prisma.inventoryLog.create({
+                data: {
+                    inventoryId: inventoryId,
+                    type: 'OUT',
+                    quantity: waste,
+                    remarks: 'Waste',
+                    createdAt: createdAt
+                }
+            });
+        }
+        res.json({ message: 'Stock deducted successfully' });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Server error deducting stock' });
+    }
+});
+// Edit log
+router.put('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { quantity, remarks, date } = req.body;
+        const log = await index_1.prisma.inventoryLog.findUnique({ where: { id } });
+        if (!log)
+            return res.status(404).json({ message: 'Log not found' });
+        const updateData = {};
+        if (remarks !== undefined)
+            updateData.remarks = remarks;
+        if (date !== undefined)
+            updateData.createdAt = new Date(date);
+        if (quantity !== undefined && Number(quantity) !== log.quantity) {
+            const newQty = Number(quantity);
+            const diff = newQty - log.quantity;
+            const inventory = await index_1.prisma.inventory.findUnique({ where: { id: log.inventoryId } });
+            if (inventory) {
+                if (log.type === 'OUT') {
+                    // If we increase OUT (diff > 0), we SUBTRACT from inventory stock
+                    // If we decrease OUT (diff < 0), we ADD back to inventory stock
+                    if (inventory.quantity - diff < 0) {
+                        return res.status(400).json({ message: 'Not enough stock available for this edit' });
+                    }
+                    await index_1.prisma.inventory.update({
+                        where: { id: inventory.id },
+                        data: { quantity: inventory.quantity - diff }
+                    });
+                }
+                else if (log.type === 'IN') {
+                    // If we increase IN (diff > 0), we ADD to inventory stock
+                    // If we decrease IN (diff < 0), we SUBTRACT from inventory stock
+                    await index_1.prisma.inventory.update({
+                        where: { id: inventory.id },
+                        data: { quantity: inventory.quantity + diff }
+                    });
+                }
+            }
+            updateData.quantity = newQty;
+        }
+        const updated = await index_1.prisma.inventoryLog.update({
+            where: { id },
+            data: updateData
+        });
+        res.json(updated);
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Error updating log' });
+    }
+});
+// Delete log
+router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const id = req.params.id;
+        const log = await index_1.prisma.inventoryLog.findUnique({ where: { id } });
+        if (!log)
+            return res.status(404).json({ message: 'Log not found' });
+        const inventory = await index_1.prisma.inventory.findUnique({ where: { id: log.inventoryId } });
+        if (inventory) {
+            if (log.type === 'OUT') {
+                // Restore stock
+                await index_1.prisma.inventory.update({
+                    where: { id: inventory.id },
+                    data: { quantity: inventory.quantity + log.quantity }
+                });
+            }
+            else if (log.type === 'IN') {
+                // Remove stock
+                await index_1.prisma.inventory.update({
+                    where: { id: inventory.id },
+                    data: { quantity: inventory.quantity - log.quantity }
+                });
+            }
+        }
+        await index_1.prisma.inventoryLog.delete({ where: { id } });
+        res.json({ message: 'Log deleted successfully' });
+    }
+    catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Error deleting log' });
     }
 });
 exports.default = router;
