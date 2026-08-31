@@ -1,0 +1,1 @@
+const { PrismaClient } = require("@prisma/client"); const prisma = new PrismaClient(); async function main() { const invs = await prisma.inventory.findMany({ select: { jobWorkType: true } }); const types = new Set(invs.map(i => i.jobWorkType)); console.log(Array.from(types)); } main().catch(console.error).finally(() => prisma.$disconnect());

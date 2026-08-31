@@ -158,6 +158,67 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
 
     if (!project) return res.status(404).json({ message: 'Project not found' });
 
+    const existingSlabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { name: true } });
+    const existingNames = new Set(existingSlabs.map(s => s.name));
+    
+    const desiredSlabs = [];
+
+    if (project.quotations.length > 0) {
+      const firstQuote = project.quotations[0];
+      if (firstQuote && firstQuote.products) {
+        const products = firstQuote.products;
+        for (const prod of products) {
+          const qty = Number(prod.qty) || 1;
+          for (let i = 1; i <= qty; i++) {
+            const pieceName = qty > 1 ? String(prod.category || 'Product') + ' ' + i : String(prod.category || 'Product');
+            const sizeStr = String(prod.length || 0) + 'L x ' + String(prod.width || 0) + 'W' + (prod.breadth ? ' | ' + prod.breadth + 'MM' : '');
+            desiredSlabs.push({ name: pieceName, size: sizeStr });
+          }
+        }
+      }
+    }
+
+    const materials = await prisma.projectMaterial.findMany({
+      where: { projectId: String(id) },
+      include: { inventory: true }
+    });
+    
+    for (const pm of materials) {
+      if (pm.inventory.type === 'slab' || pm.inventory.type === 'block') {
+         const typeName = pm.inventory.jobWorkType === 'client' ? 'Client' : 'Unnati';
+         const blockName = pm.inventory.type === 'block' ? 'Block' : 'Slab';
+         const idPart = pm.inventory.blockNumber || pm.id.substring(pm.id.length-4);
+         const pieceName = typeName + ' ' + blockName + ': ' + pm.inventory.itemName + ' (ID: ' + idPart + ')';
+         const sizeStr = String(pm.inventory.length || 0) + 'L x ' + String(pm.inventory.width || 0) + 'W | ' + String(pm.inventory.thickness || 0) + 'MM';
+         desiredSlabs.push({ name: pieceName, size: sizeStr });
+      }
+    }
+
+    let addedCount = 0;
+    for (const desired of desiredSlabs) {
+      if (!existingNames.has(desired.name)) {
+        await prisma.slab.create({
+          data: {
+            projectId: project.id,
+            name: desired.name,
+            size: desired.size,
+            status: 'pending'
+          }
+        });
+        existingNames.add(desired.name);
+        addedCount++;
+      }
+    }
+
+    res.json({ message: 'Synced new slabs.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error syncing slabs' });
+  }
+});
+
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+
     if (project.quotations.length > 0) {
       // Fetch existing slabs to preserve their requiredStages
       const slabs = await prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true, name: true, requiredStages: true } });
