@@ -232,4 +232,91 @@ router.post('/deduct', authenticate, async (req, res) => {
   }
 });
 
+
+// Edit log
+router.put('/logs/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { quantity, remarks, date } = req.body;
+    
+    const log = await prisma.inventoryLog.findUnique({ where: { id } });
+    if (!log) return res.status(404).json({ message: 'Log not found' });
+    
+    const updateData: any = {};
+    if (remarks !== undefined) updateData.remarks = remarks;
+    if (date !== undefined) updateData.createdAt = new Date(date);
+    
+    if (quantity !== undefined && Number(quantity) !== log.quantity) {
+      const newQty = Number(quantity);
+      const diff = newQty - log.quantity;
+      
+      const inventory = await prisma.inventory.findUnique({ where: { id: log.inventoryId } });
+      if (inventory) {
+        if (log.type === 'OUT') {
+          // If we increase OUT (diff > 0), we SUBTRACT from inventory stock
+          // If we decrease OUT (diff < 0), we ADD back to inventory stock
+          if (inventory.quantity - diff < 0) {
+             return res.status(400).json({ message: 'Not enough stock available for this edit' });
+          }
+          await prisma.inventory.update({
+            where: { id: inventory.id },
+            data: { quantity: inventory.quantity - diff }
+          });
+        } else if (log.type === 'IN') {
+          // If we increase IN (diff > 0), we ADD to inventory stock
+          // If we decrease IN (diff < 0), we SUBTRACT from inventory stock
+          await prisma.inventory.update({
+            where: { id: inventory.id },
+            data: { quantity: inventory.quantity + diff }
+          });
+        }
+      }
+      updateData.quantity = newQty;
+    }
+    
+    const updated = await prisma.inventoryLog.update({
+      where: { id },
+      data: updateData
+    });
+    
+    res.json(updated);
+  } catch(error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error updating log' });
+  }
+});
+
+// Delete log
+router.delete('/logs/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const log = await prisma.inventoryLog.findUnique({ where: { id } });
+    if (!log) return res.status(404).json({ message: 'Log not found' });
+    
+    const inventory = await prisma.inventory.findUnique({ where: { id: log.inventoryId } });
+    if (inventory) {
+      if (log.type === 'OUT') {
+        // Restore stock
+        await prisma.inventory.update({
+          where: { id: inventory.id },
+          data: { quantity: inventory.quantity + log.quantity }
+        });
+      } else if (log.type === 'IN') {
+        // Remove stock
+        await prisma.inventory.update({
+          where: { id: inventory.id },
+          data: { quantity: inventory.quantity - log.quantity }
+        });
+      }
+    }
+    
+    await prisma.inventoryLog.delete({ where: { id } });
+    res.json({ message: 'Log deleted successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error deleting log' });
+  }
+});
+
 export default router;
+
