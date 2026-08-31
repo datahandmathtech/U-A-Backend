@@ -173,33 +173,57 @@ router.get('/logs/:supplier', authenticate, async (req, res) => {
 // Manual deduct stock (and optional waste)
 router.post('/deduct', authenticate, async (req, res) => {
   try {
-    const { inventoryId, quantity, isWaste } = req.body;
+    const { inventoryId, usedQuantity, wasteQuantity, projectName, date } = req.body;
     
-    if (!inventoryId || !quantity) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    const used = Number(usedQuantity) || 0;
+    const waste = Number(wasteQuantity) || 0;
+    const totalDeduct = used + waste;
+
+    if (!inventoryId || totalDeduct <= 0) {
+      return res.status(400).json({ message: 'Invalid quantities' });
     }
 
     const item = await prisma.inventory.findUnique({ where: { id: inventoryId } });
     if (!item) return res.status(404).json({ message: 'Item not found' });
-    if (item.quantity < quantity) {
+    
+    // We allow deducting more than available if they really want, but let's check
+    if (item.quantity < totalDeduct) {
       return res.status(400).json({ message: 'Not enough stock available' });
     }
 
     // Update inventory quantity
     await prisma.inventory.update({
       where: { id: inventoryId },
-      data: { quantity: item.quantity - quantity }
+      data: { quantity: item.quantity - totalDeduct }
     });
 
-    // Create OUT log
-    await prisma.inventoryLog.create({
-      data: {
-        inventoryId: inventoryId,
-        type: 'OUT',
-        quantity: quantity,
-        remarks: isWaste ? 'Waste' : 'Manual Deduction'
-      }
-    });
+    const createdAt = date ? new Date(date) : new Date();
+
+    // Create OUT log for Used
+    if (used > 0) {
+      await prisma.inventoryLog.create({
+        data: {
+          inventoryId: inventoryId,
+          type: 'OUT',
+          quantity: used,
+          remarks: projectName ? `Project: ${projectName}` : 'Manual Deduction',
+          createdAt: createdAt
+        }
+      });
+    }
+
+    // Create OUT log for Waste
+    if (waste > 0) {
+      await prisma.inventoryLog.create({
+        data: {
+          inventoryId: inventoryId,
+          type: 'OUT',
+          quantity: waste,
+          remarks: 'Waste',
+          createdAt: createdAt
+        }
+      });
+    }
 
     res.json({ message: 'Stock deducted successfully' });
   } catch (error) {
