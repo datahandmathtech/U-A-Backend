@@ -74,7 +74,6 @@ const mountRoutes = (prefix = '') => {
 };
 
 mountRoutes('/api');
-mountRoutes(''); // Support proxies that strip the /api prefix
 
 // Basic Route
 app.get('/api/health', async (req, res) => {
