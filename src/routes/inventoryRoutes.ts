@@ -169,4 +169,43 @@ router.get('/logs/:supplier', authenticate, async (req, res) => {
   }
 });
 
+
+// Manual deduct stock (and optional waste)
+router.post('/deduct', authenticate, async (req, res) => {
+  try {
+    const { inventoryId, quantity, isWaste } = req.body;
+    
+    if (!inventoryId || !quantity) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    const item = await prisma.inventory.findUnique({ where: { id: inventoryId } });
+    if (!item) return res.status(404).json({ message: 'Item not found' });
+    if (item.quantity < quantity) {
+      return res.status(400).json({ message: 'Not enough stock available' });
+    }
+
+    // Update inventory quantity
+    await prisma.inventory.update({
+      where: { id: inventoryId },
+      data: { quantity: item.quantity - quantity }
+    });
+
+    // Create OUT log
+    await prisma.inventoryLog.create({
+      data: {
+        inventoryId: inventoryId,
+        type: 'OUT',
+        quantity: quantity,
+        remarks: isWaste ? 'Waste' : 'Manual Deduction'
+      }
+    });
+
+    res.json({ message: 'Stock deducted successfully' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error deducting stock' });
+  }
+});
+
 export default router;
