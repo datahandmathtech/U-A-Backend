@@ -107,7 +107,7 @@ router.post('/', authenticate, async (req, res) => {
 // Update stock (in/out)
 router.patch('/:id/stock', authenticate, async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { quantityChange, remarks } = req.body; // positive for IN, negative for OUT
     
     const item = await prisma.inventory.findUnique({ where: { id: String(id) } });
@@ -236,7 +236,7 @@ router.post('/deduct', authenticate, async (req, res) => {
 // Edit log
 router.put('/logs/:id', authenticate, async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { quantity, remarks, date } = req.body;
     
     const log = await prisma.inventoryLog.findUnique({ where: { id } });
@@ -289,7 +289,7 @@ router.put('/logs/:id', authenticate, async (req, res) => {
 // Delete log
 router.delete('/logs/:id', authenticate, async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const log = await prisma.inventoryLog.findUnique({ where: { id } });
     if (!log) return res.status(404).json({ message: 'Log not found' });
     
