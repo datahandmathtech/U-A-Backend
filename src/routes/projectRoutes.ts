@@ -178,58 +178,7 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
       }
     }
 
-    const materials = await prisma.projectMaterial.findMany({
-      where: { projectId: String(id) },
-      include: { inventory: true }
-    });
     
-    for (const pm of materials) {
-      if (pm.inventory.type === 'slab' || pm.inventory.type === 'block') {
-         const typeName = pm.inventory.jobWorkType === 'client' ? 'Client' : 'Unnati';
-         const blockName = pm.inventory.type === 'block' ? 'Block' : 'Slab';
-         const idPart = pm.inventory.blockNumber || pm.id.substring(pm.id.length-4);
-         const pieceName = typeName + ' ' + blockName + ': ' + pm.inventory.itemName + ' (ID: ' + idPart + ')';
-         const sizeStr = String(pm.inventory.length || 0) + 'L x ' + String(pm.inventory.width || 0) + 'W | ' + String(pm.inventory.thickness || 0) + 'MM';
-         desiredSlabs.push({ name: pieceName, size: sizeStr });
-      }
-    }
-
-    let addedCount = 0;
-    for (const desired of desiredSlabs) {
-      if (!existingNames.has(desired.name)) {
-        await prisma.slab.create({
-          data: {
-            projectId: project.id,
-            name: desired.name,
-            size: desired.size,
-            status: 'pending'
-          }
-        });
-        existingNames.add(desired.name);
-        addedCount++;
-      }
-    }
-
-    res.json({ message: 'Synced new slabs.' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Server error syncing slabs' });
-  }
-});
-
-// Update project (Status, workflow progression)
-router.patch('/:id', authenticate, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updateData = req.body;
-    
-    if (updateData.startDate) updateData.startDate = new Date(updateData.startDate);
-    if (updateData.deadline) updateData.deadline = new Date(updateData.deadline);
-
-    const updated = await prisma.project.update({
-      where: { id: String(id) },
-      data: updateData,
-      include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
     });
     
     // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
