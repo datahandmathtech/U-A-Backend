@@ -271,7 +271,7 @@ router.post('/material-log', authenticate, async (req, res) => {
             productName: productName?.trim() || undefined,
             slabId: slabId?.trim() || undefined,
             pieceIds: v.pieceIds || pieceIds || [],
-            approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
+            approvalStatus: (req.body.source === 'admin_manual') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
             returnedQty: 0
@@ -299,7 +299,7 @@ router.post('/material-log', authenticate, async (req, res) => {
         productName: productName?.trim() || undefined,
         slabId: slabId?.trim() || undefined,
         pieceIds: pieceIds || [],
-        approvalStatus: (req.body.source === 'admin_manual' || req.body.source === 'Material Tracking') ? 'approved' : 'pending',
+        approvalStatus: (req.body.source === 'admin_manual') ? 'approved' : 'pending',
         status: 'completed',
         isReturned: false,
         returnedQty: 0
@@ -729,24 +729,41 @@ router.patch('/:id/return', authenticate, async (req: any, res: any) => {
 // Edit material log
 router.put('/:id', authenticate, async (req, res) => {
   try {
-    const { quantityProduced, returnedQty, stage, projectId, productId, productName, slabId, pieceIds } = req.body;
+    const { quantityProduced, returnedQty, stage, projectId, productId, productName, slabId, pieceIds, vehicleNumber, transactionType, vendorId, vendorName, workerId, workerName, date, photoUrl, startPhotos } = req.body;
     
     // Get the log first to know its type and stage
     const log = await prisma.productionLog.findUnique({ where: { id: req.params.id as string } });
     if (!log) return res.status(404).json({ message: 'Log not found' });
     
+    let updateData: any = {
+      quantityProduced: quantityProduced !== undefined ? Number(quantityProduced) : undefined,
+      returnedQty: returnedQty !== undefined ? Number(returnedQty) : undefined,
+      stage: stage ? String(stage) : undefined,
+      projectId: projectId ? String(projectId) : undefined,
+      productId: productId ? String(productId) : undefined,
+      productName: productName ? String(productName) : undefined,
+      slabId: slabId ? String(slabId) : undefined,
+      pieceIds: pieceIds ? pieceIds : undefined,
+      vehicleNumber: vehicleNumber !== undefined ? String(vehicleNumber) : undefined,
+      transactionType: transactionType ? String(transactionType) : undefined,
+      vendorId: vendorId !== undefined ? String(vendorId) : undefined,
+      vendorName: vendorName !== undefined ? String(vendorName) : undefined,
+      workerId: workerId !== undefined ? String(workerId) : undefined,
+      workerName: workerName !== undefined ? String(workerName) : undefined,
+      photoUrl: photoUrl !== undefined ? String(photoUrl) : undefined,
+    };
+
+    if (date) {
+      updateData.createdAt = new Date(date);
+    }
+    
+    if (startPhotos) {
+      updateData.startPhotos = startPhotos;
+    }
+
     const updated = await prisma.productionLog.update({
       where: { id: req.params.id as string },
-      data: {
-        quantityProduced: quantityProduced ? Number(quantityProduced) : undefined,
-        returnedQty: returnedQty !== undefined ? Number(returnedQty) : undefined,
-        stage: stage ? String(stage) : undefined,
-        projectId: projectId ? String(projectId) : undefined,
-        productId: productId ? String(productId) : undefined,
-        productName: productName ? String(productName) : undefined,
-        slabId: slabId ? String(slabId) : undefined,
-        pieceIds: pieceIds ? pieceIds : undefined
-      }
+      data: updateData
     });
     
     // If pieceIds were provided and the log is approved, update the pieces!
