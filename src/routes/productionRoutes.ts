@@ -730,6 +730,11 @@ router.patch('/:id/return', authenticate, async (req: any, res: any) => {
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const { quantityProduced, returnedQty, stage, projectId, productId, productName, slabId, pieceIds } = req.body;
+    
+    // Get the log first to know its type and stage
+    const log = await prisma.productionLog.findUnique({ where: { id: req.params.id as string } });
+    if (!log) return res.status(404).json({ message: 'Log not found' });
+    
     const updated = await prisma.productionLog.update({
       where: { id: req.params.id as string },
       data: {
@@ -743,6 +748,21 @@ router.put('/:id', authenticate, async (req, res) => {
         pieceIds: pieceIds ? pieceIds : undefined
       }
     });
+    
+    // If pieceIds were provided and the log is approved, update the pieces!
+    if (pieceIds && Array.isArray(pieceIds) && log.approvalStatus === 'approved') {
+       for (const pieceId of pieceIds) {
+          const pieceStatus = log.transactionType === 'OUT' ? 'active' : 'completed';
+          await prisma.piece.update({
+             where: { id: String(pieceId) },
+             data: {
+                status: pieceStatus,
+                stage: log.stage.replace(' Work', '')
+             }
+          });
+       }
+    }
+    
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Server error editing material log' });
