@@ -373,7 +373,7 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                                 where: { id: pieceId },
                                 data: {
                                     status: pieceStatus,
-                                    ...(split.stage && { stage: split.stage })
+                                    stage: split.stage ? split.stage : originalLog.stage.replace(' Work', '')
                                 }
                             });
                             await index_1.prisma.pieceLog.create({
