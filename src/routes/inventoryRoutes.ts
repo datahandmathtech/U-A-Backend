@@ -135,6 +135,25 @@ router.patch('/:id/stock', authenticate, async (req, res) => {
   }
 });
 
+// Get logs by inventory item ID
+router.get('/item-logs/:inventoryId', authenticate, async (req, res) => {
+  try {
+    const { inventoryId } = req.params;
+    const logs = await prisma.inventoryLog.findMany({
+      where: { inventoryId: String(inventoryId) },
+      orderBy: { createdAt: 'asc' }, // Ascending to calculate balance easily
+      include: {
+        inventory: {
+           select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true, quantity: true, supplier: true }
+        }
+      }
+    });
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error fetching item logs' });
+  }
+});
+
 // Get logs by supplier
 router.get('/logs/:supplier', authenticate, async (req, res) => {
   try {
