@@ -675,6 +675,10 @@ router.patch('/:id/return', authMiddleware_1.authenticate, async (req, res) => {
 router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { quantityProduced, returnedQty, stage, projectId, productId, productName, slabId, pieceIds } = req.body;
+        // Get the log first to know its type and stage
+        const log = await index_1.prisma.productionLog.findUnique({ where: { id: req.params.id } });
+        if (!log)
+            return res.status(404).json({ message: 'Log not found' });
         const updated = await index_1.prisma.productionLog.update({
             where: { id: req.params.id },
             data: {
@@ -688,6 +692,19 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 pieceIds: pieceIds ? pieceIds : undefined
             }
         });
+        // If pieceIds were provided and the log is approved, update the pieces!
+        if (pieceIds && Array.isArray(pieceIds) && log.approvalStatus === 'approved') {
+            for (const pieceId of pieceIds) {
+                const pieceStatus = log.transactionType === 'OUT' ? 'active' : 'completed';
+                await index_1.prisma.piece.update({
+                    where: { id: String(pieceId) },
+                    data: {
+                        status: pieceStatus,
+                        stage: log.stage.replace(' Work', '')
+                    }
+                });
+            }
+        }
         res.json(updated);
     }
     catch (error) {

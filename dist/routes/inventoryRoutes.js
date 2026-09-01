@@ -120,6 +120,25 @@ router.patch('/:id/stock', authMiddleware_1.authenticate, async (req, res) => {
         res.status(500).json({ message: 'Server error updating stock' });
     }
 });
+// Get logs by inventory item ID
+router.get('/item-logs/:inventoryId', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { inventoryId } = req.params;
+        const logs = await index_1.prisma.inventoryLog.findMany({
+            where: { inventoryId: String(inventoryId) },
+            orderBy: { createdAt: 'asc' }, // Ascending to calculate balance easily
+            include: {
+                inventory: {
+                    select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true, quantity: true, supplier: true }
+                }
+            }
+        });
+        res.json(logs);
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Server error fetching item logs' });
+    }
+});
 // Get logs by supplier
 router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) => {
     try {
