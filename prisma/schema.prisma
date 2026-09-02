@@ -20,6 +20,7 @@ model User {
   wage           Float?          @default(0)
   otRate         Float?          @default(0)
   pieceRate      Float?          @default(0) // Rate per Sq.Ft.
+  modulesAccess  String[]        @default([])
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   projects       Project[]       @relation("AssignedProjects")

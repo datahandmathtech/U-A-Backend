@@ -231,7 +231,7 @@ router.get('/staff-salary', authenticate, async (req, res) => {
 router.put('/staff/:id', authenticate, async (req, res) => {
   try {
     const id = req.params.id as string;
-    const { name, staffId, role, department, password } = req.body;
+    const { name, staffId, role, department, password, modulesAccess } = req.body;
     
     // Check if user exists
     const user = await prisma.user.findUnique({ where: { id } });
@@ -243,7 +243,8 @@ router.put('/staff/:id', authenticate, async (req, res) => {
       name, 
       staffId: staffId && staffId.trim() !== '' ? staffId : null, 
       role, 
-      department 
+      department,
+      ...(modulesAccess !== undefined ? { modulesAccess } : {})
     };
 
     if (password && password.trim() !== '') {
@@ -252,10 +253,9 @@ router.put('/staff/:id', authenticate, async (req, res) => {
 
     const updatedUser = await prisma.user.update({
       where: { id },
-      data: dataToUpdate
+      data: dataToUpdate,
     });
-
-    res.json({ message: 'Staff member updated successfully', user: { id: updatedUser.id, name: updatedUser.name } });
+    res.json(updatedUser);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error updating staff' });
@@ -293,7 +293,7 @@ router.delete('/staff/:id', authenticate, async (req, res) => {
 router.get('/staff', authenticate, async (req, res) => {
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, name: true, email: true, staffId: true, role: true, department: true }
+      select: { id: true, name: true, email: true, staffId: true, role: true, department: true, modulesAccess: true }
     });
     res.json(users);
   } catch (error) {

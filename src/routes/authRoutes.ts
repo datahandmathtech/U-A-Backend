@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../index';
@@ -10,7 +10,7 @@ router.get('/ping', (req, res) => res.json({ status: 'pong', message: 'Backend i
 // Register a new user
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role, department, wage, otRate, staffId } = req.body;
+    const { name, email, password, role, department, wage, otRate, staffId, modulesAccess } = req.body;
     
     const finalEmail = email || (staffId ? `${staffId}@unnati.com` : `${name.replace(/\s+/g, '').toLowerCase()}${Math.floor(Math.random()*1000)}@unnati.com`);
 
@@ -39,11 +39,12 @@ router.post('/register', async (req, res) => {
         department,
         wage: wage ? parseFloat(wage) : 0,
         otRate: otRate ? parseFloat(otRate) : 0,
+        modulesAccess: modulesAccess || [],
       },
     });
 
-    res.status(201).json({ message: 'User created successfully', userId: user.id });
-  } catch (error) {
+    res.status(201).json({ message: 'User created successfully', user });
+  } catch (error: any) {
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -83,13 +84,14 @@ router.post('/login', async (req, res) => {
     );
 
     res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          modulesAccess: user.modulesAccess,
+        },
     });
   } catch (error: any) {
     console.error('Login Error:', error);
