@@ -272,7 +272,7 @@ router.post('/material-log', authenticate, async (req, res) => {
             productName: productName?.trim() || undefined,
             slabId: slabId?.trim() || undefined,
             pieceIds: v.pieceIds || pieceIds || [],
-            approvalStatus: (req.body.source === 'admin_manual' || stage === 'Packing' || stage === 'Dispatch') ? 'approved' : 'pending',
+            approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
             returnedQty: 0
@@ -301,7 +301,7 @@ router.post('/material-log', authenticate, async (req, res) => {
         productName: productName?.trim() || undefined,
         slabId: slabId?.trim() || undefined,
         pieceIds: pieceIds || [],
-        approvalStatus: (req.body.source === 'admin_manual' || stage === 'Packing' || stage === 'Dispatch') ? 'approved' : 'pending',
+        approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
         status: 'completed',
         isReturned: false,
         returnedQty: 0
