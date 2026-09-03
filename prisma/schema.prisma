@@ -301,6 +301,7 @@ model ProductionLog {
   vendor          Vendor?   @relation(fields: [vendorId], references: [id])
   vehicleNumber   String? // For tracking transport vehicles
   challanNumber   String? // For manual auto-numbering/slip tracking
+  boxCode         String? // For packing stage
   slabId          String?   @db.ObjectId
   pieceIds        String[]  @default([])
   isReturned      Boolean?  @default(false)

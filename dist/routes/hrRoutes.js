@@ -221,7 +221,7 @@ router.get('/staff-salary', authMiddleware_1.authenticate, async (req, res) => {
 router.put('/staff/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const id = req.params.id;
-        const { name, staffId, role, department, password } = req.body;
+        const { name, staffId, role, department, password, modulesAccess } = req.body;
         // Check if user exists
         const user = await index_1.prisma.user.findUnique({ where: { id } });
         if (!user) {
@@ -231,16 +231,17 @@ router.put('/staff/:id', authMiddleware_1.authenticate, async (req, res) => {
             name,
             staffId: staffId && staffId.trim() !== '' ? staffId : null,
             role,
-            department
+            department,
+            ...(modulesAccess !== undefined ? { modulesAccess } : {})
         };
         if (password && password.trim() !== '') {
             dataToUpdate.password = await bcryptjs_1.default.hash(password, 10);
         }
         const updatedUser = await index_1.prisma.user.update({
             where: { id },
-            data: dataToUpdate
+            data: dataToUpdate,
         });
-        res.json({ message: 'Staff member updated successfully', user: { id: updatedUser.id, name: updatedUser.name } });
+        res.json(updatedUser);
     }
     catch (error) {
         console.error(error);
@@ -274,7 +275,7 @@ router.delete('/staff/:id', authMiddleware_1.authenticate, async (req, res) => {
 router.get('/staff', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const users = await index_1.prisma.user.findMany({
-            select: { id: true, name: true, email: true, staffId: true, role: true, department: true }
+            select: { id: true, name: true, email: true, staffId: true, role: true, department: true, modulesAccess: true }
         });
         res.json(users);
     }
