@@ -84,6 +84,9 @@ model Project {
   materials      ProjectMaterial[]
   projectClosure ProjectClosure?
   slabs          Slab[]
+
+  @@index([status])
+  @@index([createdAt])
 }
 
   model ProjectMaterial {
@@ -412,6 +415,10 @@ model MachineLog {
   remarks             String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+
+  @@index([status])
+  @@index([startTime])
+  @@index([createdAt])
 }
 
 model LaborContract {
