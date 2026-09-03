@@ -43,6 +43,7 @@ const drawingRoutes_1 = __importDefault(require("./routes/drawingRoutes"));
 const slabRoutes_1 = __importDefault(require("./routes/slabRoutes"));
 const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
 const wasteRoutes_1 = __importDefault(require("./routes/wasteRoutes"));
+const packingRoutes_1 = __importDefault(require("./routes/packingRoutes"));
 // Routes
 const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/auth`, authRoutes_1.default);
@@ -72,6 +73,7 @@ const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/slabs`, slabRoutes_1.default);
     app.use(`${prefix}/vendors`, vendorRoutes_1.default);
     app.use(`${prefix}/waste`, wasteRoutes_1.default);
+    app.use(`${prefix}/packing-items`, packingRoutes_1.default);
 };
 mountRoutes('/api');
 // Basic Route

@@ -561,3 +561,15 @@ model Vendor {
   pieceLogs      PieceLog[]
   pieces         Piece[]
 }
+
+model PackingItem {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String   @db.ObjectId
+  box         String
+  code        String
+  subCategory String?
+  size        String?
+  pcs         Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
