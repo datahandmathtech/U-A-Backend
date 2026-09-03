@@ -163,6 +163,8 @@ router.post('/clock-out', authenticate, async (req, res) => {
     await prisma.productionLog.create({
       data: {
         projectId: log.projectId,
+        productId: log.productId,
+        productName: log.productName,
         machineId: log.machineId,
         stage: 'Production Work',
         quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1,

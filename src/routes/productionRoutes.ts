@@ -347,7 +347,9 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
       where: { approvalStatus: 'pending' },
       orderBy: { createdAt: 'desc' },
       include: {
-        worker: { select: { name: true } }
+        worker: { select: { name: true } },
+        project: { select: { name: true, projectId: true, clientName: true } },
+        machine: { select: { name: true } }
       }
     });
     res.json(pendingLogs);
