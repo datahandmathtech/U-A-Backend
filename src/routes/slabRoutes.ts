@@ -62,7 +62,7 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
 // Create a new slab
 router.post('/', authenticate, async (req, res) => {
   try {
-    const { projectId, inventoryId, name, size, cost } = req.body;
+    const { projectId, inventoryId, name, size, cost, requiredStages, pieces } = req.body;
 
     // Optional: Deduct from inventory if inventoryId is provided
     if (inventoryId) {
@@ -89,7 +89,9 @@ router.post('/', authenticate, async (req, res) => {
         inventoryId: inventoryId || null,
         name,
         size,
-        cost: Number(cost) || 0
+        cost: Number(cost) || 0,
+        requiredStages: requiredStages || ['Production', 'Polishing', 'Packing', 'Dispatch'],
+        pieces: pieces ? { create: pieces } : undefined
       }
     });
 
