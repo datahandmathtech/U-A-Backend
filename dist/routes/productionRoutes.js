@@ -373,8 +373,18 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                             remarks: remarks ? String(remarks) : originalLog.remarks
                         }
                     });
-                    if (split.pieceIds && split.pieceIds.length > 0) {
-                        for (const pieceId of split.pieceIds) {
+                    let effectivePieceIds = split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [];
+                    if (effectivePieceIds.length === 0 && split.slabId) {
+                        const slabPieces = await index_1.prisma.piece.findMany({
+                            where: { slabId: String(split.slabId) },
+                            orderBy: { pieceNumber: 'asc' }
+                        });
+                        if (slabPieces.length > 0) {
+                            effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                        }
+                    }
+                    if (effectivePieceIds.length > 0) {
+                        for (const pieceId of effectivePieceIds) {
                             const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
                             await index_1.prisma.piece.update({
                                 where: { id: pieceId },
@@ -432,8 +442,18 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 }
                 // Update pieces for all splits including the first one
                 for (const split of splits) {
-                    if (split.pieceIds && split.pieceIds.length > 0) {
-                        for (const pieceId of split.pieceIds) {
+                    let effectivePieceIds = split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [];
+                    if (effectivePieceIds.length === 0 && split.slabId) {
+                        const slabPieces = await index_1.prisma.piece.findMany({
+                            where: { slabId: String(split.slabId) },
+                            orderBy: { pieceNumber: 'asc' }
+                        });
+                        if (slabPieces.length > 0) {
+                            effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                        }
+                    }
+                    if (effectivePieceIds.length > 0) {
+                        for (const pieceId of effectivePieceIds) {
                             const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
                             await index_1.prisma.piece.update({
                                 where: { id: pieceId },
