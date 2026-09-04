@@ -12,7 +12,13 @@ router.get('/', authenticate, async (req, res) => {
       include: { 
         assignedTo: { select: { name: true } },
         quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
-        slabs: { select: { _count: { select: { pieces: true } } } }
+        slabs: { 
+          select: { 
+            pieces: { 
+              select: { stage: true, status: true } 
+            } 
+          } 
+        }
       }
     });
 
@@ -28,14 +34,27 @@ router.get('/', authenticate, async (req, res) => {
         }
       }
 
-      // Completed Pieces = Total number of actual pieces that exist in the pipeline for this project
-      let calculatedCompletedPieces = p.slabs?.reduce((sum: number, slab: any) => sum + (slab._count?.pieces || 0), 0) || 0;
+      // Completed Pieces = Pieces that have reached the final stage (Dispatch) and are marked completed
+      let calculatedCompletedPieces = 0;
+      if (p.slabs && p.slabs.length > 0) {
+        for (const slab of p.slabs) {
+          if (slab.pieces && slab.pieces.length > 0) {
+            for (const piece of slab.pieces) {
+              const stage = (piece.stage || '').toLowerCase();
+              const status = (piece.status || '').toLowerCase();
+              if (stage === 'dispatch' && status === 'completed') {
+                calculatedCompletedPieces += 1;
+              }
+            }
+          }
+        }
+      }
 
       // We remove the included relations from the response to save payload size, 
       // but attach the calculated fields.
       const { quotations, slabs, ...projectData } = p;
 
-      // Cap completed pieces to not exceed total pieces (to match item-based counting)
+      // Cap completed pieces to not exceed total pieces
       if (calculatedTotalPieces > 0 && calculatedCompletedPieces > calculatedTotalPieces) {
         calculatedCompletedPieces = calculatedTotalPieces;
       }
