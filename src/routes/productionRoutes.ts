@@ -247,6 +247,9 @@ router.post('/material-log', authenticate, async (req, res) => {
         productName = parentLog.productName || productName;
         productId = parentLog.productId || productId;
         slabId = parentLog.slabId || slabId;
+        vendorId = parentLog.vendorId || vendorId;
+        vendorName = parentLog.vendorName || vendorName;
+        stage = parentLog.stage || stage;
       }
     } else {
       projectId = req.body.projectId;
