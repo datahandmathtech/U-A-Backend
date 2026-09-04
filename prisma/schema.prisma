@@ -51,6 +51,7 @@ model Project {
   name               String
   description        String?
   status             String    @default("enquiry") // enquiry, design_sharing, design_finalized, quotation, advance_payment, work_order, completed
+  isDirectWorkOrder  Boolean   @default(false)
   startDate          DateTime?
   deadline           DateTime?
   progressPercentage Float     @default(0)
