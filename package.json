@@ -19,10 +19,10 @@
   "type": "commonjs",
   "devDependencies": {
     "nodemon": "^3.1.14",
-    "prisma": "^5.22.0",
     "ts-node": "^10.9.2"
   },
   "dependencies": {
+    "prisma": "^5.22.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
