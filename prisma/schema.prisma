@@ -313,6 +313,10 @@ model ProductionLog {
   remarks   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([approvalStatus, stage])
+  @@index([transactionType, approvalStatus])
+  @@index([createdAt(sort: Desc)])
 }
 
 model Crate {
