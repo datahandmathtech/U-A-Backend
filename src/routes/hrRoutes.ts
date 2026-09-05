@@ -191,10 +191,12 @@ router.get('/staff-salary', authenticate, async (req, res) => {
         otRate: true,
         pieceRate: true,
         attendances: {
-          where: { checkOut: { not: null } }
+          where: { checkOut: { not: null } },
+          select: { checkIn: true, checkOut: true }
         },
         productionLogs: {
-          where: { status: 'completed' }
+          where: { status: 'completed' },
+          select: { quantityProduced: true }
         }
       }
     });

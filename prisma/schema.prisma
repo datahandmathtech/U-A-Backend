@@ -121,6 +121,9 @@ model Lead {
 
   assignedToId String? @db.ObjectId
   assignedTo   User?   @relation("AssignedLeads", fields: [assignedToId], references: [id])
+
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Design {
@@ -209,6 +212,9 @@ model Invoice {
   dueDate       DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([projectId])
+  @@index([createdAt])
 }
 
 model ProductCategory {
@@ -248,6 +254,10 @@ model Inventory {
   slabs            Slab[]
   stockBalances    DailyStockBalance[]
   logs             InventoryLog[]
+
+  @@index([type])
+  @@index([jobWorkType])
+  @@index([createdAt])
 }
 
 model InventoryLog {
@@ -258,6 +268,10 @@ model InventoryLog {
   quantity    Float
   remarks     String?
   createdAt   DateTime  @default(now())
+
+  @@index([inventoryId])
+  @@index([createdAt])
+  @@index([type])
 }
 
 model Machine {
@@ -363,6 +377,10 @@ model Attendance {
   status      String    @default("present") // present, absent, half_day
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([date])
+  @@index([checkIn])
 }
 
 model Payroll {
@@ -425,6 +443,9 @@ model MachineLog {
   @@index([status])
   @@index([startTime])
   @@index([createdAt])
+  @@index([machineId])
+  @@index([operatorId])
+  @@index([projectId])
 }
 
 model LaborContract {
@@ -451,6 +472,8 @@ model Expense {
   user        User?    @relation(fields: [paidBy], references: [id])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([date])
 }
 
 model ElectricityLog {
@@ -493,6 +516,10 @@ model Slab {
   updatedAt      DateTime   @updatedAt
 
   pieces Piece[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model Piece {
@@ -513,6 +540,10 @@ model Piece {
   updatedAt   DateTime @updatedAt
 
   logs PieceLog[]
+
+  @@index([slabId])
+  @@index([stage, status])
+  @@index([createdAt])
 }
 
 model PieceLog {
@@ -538,6 +569,12 @@ model PieceLog {
   remarks         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+
+  @@index([pieceId])
+  @@index([status])
+  @@index([operatorId])
+  @@index([machineId])
+  @@index([createdAt])
 }
 
 model DailyStockBalance {

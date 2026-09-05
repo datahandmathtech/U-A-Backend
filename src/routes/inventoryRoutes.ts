@@ -17,19 +17,17 @@ router.get('/', authenticate, async (req, res) => {
     const startOfFy = new Date(selectedFyYear, 3, 1); // April 1st
     const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
 
-    const inventory = await prisma.inventory.findMany({
-      orderBy: { createdAt: 'desc' }
-    });
-    
-    const [logsBeforeFy, logsDuringFy] = await Promise.all([
-      // Logs before the FY to calculate Opening Stock correctly from total quantity
-      // Actually, opening stock = current quantity - (net IN during FY + net IN after FY) + (net OUT during FY + net OUT after FY)
-      // Or simpler: opening stock = current quantity - net movement from start of FY to now.
-      prisma.inventoryLog.findMany({
-        where: { createdAt: { gte: startOfFy } }
+    const [inventory, logsBeforeFy, logsDuringFy] = await Promise.all([
+      prisma.inventory.findMany({
+        orderBy: { createdAt: 'desc' }
       }),
       prisma.inventoryLog.findMany({
-        where: { createdAt: { gte: startOfFy, lte: endOfFy } }
+        where: { createdAt: { gte: startOfFy } },
+        select: { inventoryId: true, type: true, quantity: true }
+      }),
+      prisma.inventoryLog.findMany({
+        where: { createdAt: { gte: startOfFy, lte: endOfFy } },
+        select: { inventoryId: true, type: true, quantity: true }
       })
     ]);
     
