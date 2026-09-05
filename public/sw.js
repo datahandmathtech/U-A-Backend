@@ -1,5 +1,5 @@
 // Service Worker for Unnati Arts PWA
-const CACHE_NAME = 'unnati-arts-v2';
+const CACHE_NAME = 'unnati-arts-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -34,7 +34,7 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => clients.claim())
+    }).then(() => self.clients.claim())
   );
 });
 
@@ -68,9 +68,12 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(async () => {
-          const cached = await caches.match('/index.html') || await caches.match('/');
+          const cached = (await caches.match('/index.html')) || (await caches.match('/'));
           if (cached) return cached;
-          return new Response('Offline', { status: 503, statusText: 'Offline' });
+          return new Response(
+            '<!doctype html><html><head><meta charset="utf-8"><title>Unnati Arts</title><meta http-equiv="refresh" content="2"></head><body style="font-family:sans-serif;text-align:center;padding:50px;"><h2>Reconnecting to Unnati Arts ERP...</h2><p>Please wait a moment while the application reconnects.</p></body></html>',
+            { status: 200, headers: { 'Content-Type': 'text/html' } }
+          );
         })
     );
     return;
@@ -95,15 +98,20 @@ self.addEventListener('fetch', (event) => {
             }
             return networkResponse;
           })
-          .catch(() => cachedResponse);
+          .catch(() => {
+            if (cachedResponse) return cachedResponse;
+            return new Response('', { status: 404, statusText: 'Not Found' });
+          });
 
         return cachedResponse || fetchPromise;
+      }).catch(() => {
+        return new Response('', { status: 404, statusText: 'Not Found' });
       })
     );
     return;
   }
 
-  // Default network fetch
+  // Default network fetch with fallback
   event.respondWith(
     fetch(request).catch(async () => {
       const cached = await caches.match(request);
