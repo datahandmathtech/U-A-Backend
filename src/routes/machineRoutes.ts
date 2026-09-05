@@ -62,10 +62,29 @@ router.put('/:id', authenticate, async (req, res) => {
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    await prisma.machine.delete({ where: { id: String(id) } });
-    res.json({ message: 'Machine deleted' });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error deleting machine' });
+    const machineId = String(id);
+
+    const machine = await prisma.machine.findUnique({
+      where: { id: machineId }
+    });
+
+    if (!machine) {
+      return res.status(404).json({ message: 'Machine not found or already deleted' });
+    }
+
+    // Cascade / Unlink relations safely
+    await Promise.allSettled([
+      prisma.machineLog.deleteMany({ where: { machineId } }),
+      prisma.pieceLog.updateMany({ where: { machineId }, data: { machineId: null } }),
+      prisma.productionLog.updateMany({ where: { machineId }, data: { machineId: null } }),
+      prisma.attendance.updateMany({ where: { machineId }, data: { machineId: null } })
+    ]);
+
+    await prisma.machine.delete({ where: { id: machineId } });
+    res.json({ message: 'Machine deleted successfully' });
+  } catch (error: any) {
+    console.error('Server error deleting machine:', error);
+    res.status(500).json({ message: 'Server error deleting machine', error: error?.message || error });
   }
 });
 
