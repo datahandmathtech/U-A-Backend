@@ -39,10 +39,31 @@ router.get('/diagnostics', async (req, res) => {
     dbError = err.message;
   }
 
+  const net = await import('net');
+  let tcpStatus = 'unknown';
+  try {
+    await new Promise((resolve, reject) => {
+      const s = net.createConnection(27017, 'ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net', () => {
+        s.end();
+        resolve('OPEN');
+      });
+      s.on('error', (e) => reject(e));
+      s.setTimeout(3000, () => {
+        s.destroy();
+        reject(new Error('TCP_TIMEOUT'));
+      });
+    });
+    tcpStatus = 'PORT_27017_REACHABLE';
+  } catch (e: any) {
+    tcpStatus = 'PORT_27017_BLOCKED_OR_TIMEOUT: ' + e.message;
+  }
+
   res.json({
     serverOutboundIp: outboundIp,
     dbConfigured,
     dbType,
+    dbHost: dbUrl ? dbUrl.replace(/\/\/.*?:.*?@/, '//***:***@') : null,
+    tcpStatus,
     dbStatus,
     dbError,
     elapsedMs: elapsed,
