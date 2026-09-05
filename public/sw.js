@@ -1,5 +1,5 @@
 // Service Worker for Unnati Arts PWA
-const CACHE_NAME = 'unnati-arts-v4';
+const CACHE_NAME = 'unnati-arts-v5';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
