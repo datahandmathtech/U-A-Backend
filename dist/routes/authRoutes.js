@@ -9,6 +9,46 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const index_1 = require("../index");
 const router = (0, express_1.Router)();
 router.get('/ping', (req, res) => res.json({ status: 'pong', message: 'Backend is alive and responding instantly.' }));
+router.get('/diagnostics', async (req, res) => {
+    let outboundIp = 'unknown';
+    try {
+        const ipRes = await fetch('https://api.ipify.org?format=json');
+        const ipData = await ipRes.json();
+        outboundIp = ipData.ip;
+    }
+    catch (e) {
+        outboundIp = 'error: ' + e.message;
+    }
+    const dbUrl = process.env.DATABASE_URL;
+    const dbConfigured = !!dbUrl;
+    const dbType = dbUrl ? (dbUrl.startsWith('mongodb') ? 'MongoDB Atlas' : 'Other') : 'MISSING';
+    let dbStatus = 'testing';
+    let dbError = null;
+    let elapsed = 0;
+    try {
+        const start = Date.now();
+        const testQuery = Promise.race([
+            index_1.prisma.user.findFirst({ select: { id: true } }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DATABASE_CONNECTION_TIMEOUT_5_SECONDS')), 5000))
+        ]);
+        await testQuery;
+        elapsed = Date.now() - start;
+        dbStatus = 'CONNECTED_OK';
+    }
+    catch (err) {
+        dbStatus = 'FAILED';
+        dbError = err.message;
+    }
+    res.json({
+        serverOutboundIp: outboundIp,
+        dbConfigured,
+        dbType,
+        dbStatus,
+        dbError,
+        elapsedMs: elapsed,
+        nodeEnv: process.env.NODE_ENV
+    });
+});
 // Register a new user
 router.post('/register', async (req, res) => {
     try {
