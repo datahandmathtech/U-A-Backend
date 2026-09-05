@@ -101,13 +101,17 @@ router.post('/login', async (req, res) => {
 
     const cleanInput = (emailOrStaffId || '').trim();
 
-    // Fast indexed path: Exact match on unique indexed fields (email, staffId)
+    // Fast indexed path: Exact match on unique indexed fields (email, staffId, name)
+    const capitalizedInput = cleanInput.length > 0 ? (cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1).toLowerCase()) : cleanInput;
     let user = await prisma.user.findFirst({
       where: {
         OR: [
           { email: cleanInput },
           { staffId: cleanInput },
-          { email: cleanInput.toLowerCase() }
+          { email: cleanInput.toLowerCase() },
+          { name: cleanInput },
+          { name: cleanInput.toLowerCase() },
+          { name: capitalizedInput }
         ]
       }
     });

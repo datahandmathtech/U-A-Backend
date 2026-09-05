@@ -32,6 +32,8 @@ model User {
   machineLogs    MachineLog[]
   expenses       Expense[]
   pieceLogs      PieceLog[]
+
+  @@index([name])
 }
 
 model Project {
