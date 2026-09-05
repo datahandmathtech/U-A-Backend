@@ -43,8 +43,16 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  // Do not intercept non-GET requests or API calls
-  if (request.method !== 'GET' || url.pathname.startsWith('/api') || url.port === '5000') {
+  // Do not intercept on localhost dev server, non-GET requests, or API calls
+  if (
+    url.hostname === 'localhost' ||
+    url.port === '5173' ||
+    request.method !== 'GET' ||
+    url.pathname.startsWith('/api') ||
+    url.port === '5000' ||
+    url.pathname.includes('@vite') ||
+    url.pathname.startsWith('/src/')
+  ) {
     return;
   }
 
@@ -53,12 +61,16 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          if (response && response.status === 200) {
+            const responseClone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          }
           return response;
         })
-        .catch(() => {
-          return caches.match('/index.html') || caches.match('/');
+        .catch(async () => {
+          const cached = await caches.match('/index.html') || await caches.match('/');
+          if (cached) return cached;
+          return new Response('Offline', { status: 503, statusText: 'Offline' });
         })
     );
     return;
@@ -93,6 +105,10 @@ self.addEventListener('fetch', (event) => {
 
   // Default network fetch
   event.respondWith(
-    fetch(request).catch(() => caches.match(request))
+    fetch(request).catch(async () => {
+      const cached = await caches.match(request);
+      if (cached) return cached;
+      return new Response('', { status: 408, statusText: 'Request Timed Out' });
+    })
   );
 });
