@@ -14,30 +14,53 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const selectedFyYear = fyYear ? parseInt(fyYear, 10) : currentFyYear;
         const startOfFy = new Date(selectedFyYear, 3, 1); // April 1st
         const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
-        const [inventory, logsBeforeFy, logsDuringFy] = await Promise.all([
+        const [inventory, logsSinceStartOfFy] = await Promise.all([
             index_1.prisma.inventory.findMany({
-                orderBy: { createdAt: 'desc' }
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    projectMaterials: {
+                        include: {
+                            project: {
+                                select: { id: true, name: true, projectId: true, clientName: true }
+                            }
+                        }
+                    },
+                    slabs: {
+                        include: {
+                            project: {
+                                select: { id: true, name: true, projectId: true, clientName: true }
+                            }
+                        }
+                    }
+                }
             }),
             index_1.prisma.inventoryLog.findMany({
                 where: { createdAt: { gte: startOfFy } },
-                select: { inventoryId: true, type: true, quantity: true }
-            }),
-            index_1.prisma.inventoryLog.findMany({
-                where: { createdAt: { gte: startOfFy, lte: endOfFy } },
-                select: { inventoryId: true, type: true, quantity: true }
+                select: { inventoryId: true, type: true, quantity: true, createdAt: true }
             })
         ]);
+        // Fast O(1) aggregation Maps
+        const netChangeMap = new Map();
+        const inQtyMap = new Map();
+        const outQtyMap = new Map();
+        const endOfFyTime = endOfFy.getTime();
+        for (const log of logsSinceStartOfFy) {
+            const net = netChangeMap.get(log.inventoryId) || 0;
+            netChangeMap.set(log.inventoryId, net + (log.type === 'IN' ? log.quantity : -log.quantity));
+            if (log.createdAt.getTime() <= endOfFyTime) {
+                if (log.type === 'IN') {
+                    inQtyMap.set(log.inventoryId, (inQtyMap.get(log.inventoryId) || 0) + log.quantity);
+                }
+                else if (log.type === 'OUT') {
+                    outQtyMap.set(log.inventoryId, (outQtyMap.get(log.inventoryId) || 0) + log.quantity);
+                }
+            }
+        }
         const enrichedInventory = inventory.map(item => {
-            // Calculate net change from start of FY to now
-            const logsFromStartOfFyToNow = logsBeforeFy.filter(l => l.inventoryId === item.id);
-            const inSinceStartOfFy = logsFromStartOfFyToNow.filter(l => l.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
-            const outSinceStartOfFy = logsFromStartOfFyToNow.filter(l => l.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
-            const netChangeSinceStartOfFy = inSinceStartOfFy - outSinceStartOfFy;
+            const netChangeSinceStartOfFy = netChangeMap.get(item.id) || 0;
             const openingStock = item.quantity - netChangeSinceStartOfFy;
-            // Calculate IN and OUT during the selected FY
-            const itemLogs = logsDuringFy.filter(l => l.inventoryId === item.id);
-            const inQty = itemLogs.filter(l => l.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
-            const outQty = itemLogs.filter(l => l.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
+            const inQty = inQtyMap.get(item.id) || 0;
+            const outQty = outQtyMap.get(item.id) || 0;
             return {
                 ...item,
                 openingStock,
@@ -124,7 +147,19 @@ router.get('/item-logs/:inventoryId', authMiddleware_1.authenticate, async (req,
     try {
         const { inventoryId } = req.params;
         const item = await index_1.prisma.inventory.findUnique({
-            where: { id: String(inventoryId) }
+            where: { id: String(inventoryId) },
+            include: {
+                projectMaterials: {
+                    include: {
+                        project: true
+                    }
+                },
+                slabs: {
+                    include: {
+                        project: true
+                    }
+                }
+            }
         });
         const logs = await index_1.prisma.inventoryLog.findMany({
             where: { inventoryId: String(inventoryId) },
@@ -146,10 +181,40 @@ router.get('/item-logs/:inventoryId', authMiddleware_1.authenticate, async (req,
 router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { supplier } = req.params;
-        // Find all inventory items for this supplier
+        // Find all inventory items for this supplier or project
         const inventoryItems = await index_1.prisma.inventory.findMany({
-            where: { supplier: String(supplier) },
-            select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true }
+            where: {
+                OR: [
+                    { supplier: String(supplier) },
+                    {
+                        projectMaterials: {
+                            some: {
+                                project: {
+                                    OR: [
+                                        { name: String(supplier) },
+                                        { projectId: String(supplier) },
+                                        { clientName: String(supplier) }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    {
+                        slabs: {
+                            some: {
+                                project: {
+                                    OR: [
+                                        { name: String(supplier) },
+                                        { projectId: String(supplier) },
+                                        { clientName: String(supplier) }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+            select: { id: true, itemName: true, blockNumber: true, length: true, width: true, thickness: true, unit: true, supplier: true }
         });
         const inventoryIds = inventoryItems.map(i => i.id);
         // Get all logs for those items
@@ -174,7 +239,7 @@ router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) =>
 // Manual deduct stock (and optional waste)
 router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { inventoryId, usedQuantity, wasteQuantity, projectName, date } = req.body;
+        const { inventoryId, usedQuantity, wasteQuantity, projectName, projectId, slabId, pieceId, pieceName, length, width, thickness, date } = req.body;
         const used = Number(usedQuantity) || 0;
         const waste = Number(wasteQuantity) || 0;
         const totalDeduct = used + waste;
@@ -193,7 +258,62 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: inventoryId },
             data: { quantity: item.quantity - totalDeduct }
         });
+        // Link Piece to this Inventory Item via ProjectMaterial
+        let targetProjectId = projectId;
+        if (pieceId) {
+            const piece = await index_1.prisma.piece.findUnique({
+                where: { id: pieceId },
+                include: { slab: true }
+            });
+            if (piece) {
+                targetProjectId = targetProjectId || piece.slab?.projectId;
+                if (targetProjectId) {
+                    let projMat = await index_1.prisma.projectMaterial.findFirst({
+                        where: {
+                            projectId: targetProjectId,
+                            inventoryId: inventoryId
+                        }
+                    });
+                    if (!projMat) {
+                        projMat = await index_1.prisma.projectMaterial.create({
+                            data: {
+                                projectId: targetProjectId,
+                                inventoryId: inventoryId,
+                                quantity: used,
+                                usedQuantity: used,
+                                cost: 0
+                            }
+                        });
+                    }
+                    else {
+                        projMat = await index_1.prisma.projectMaterial.update({
+                            where: { id: projMat.id },
+                            data: {
+                                quantity: (projMat.quantity || 0) + used,
+                                usedQuantity: (projMat.usedQuantity || 0) + used
+                            }
+                        });
+                    }
+                    const usedSizeStr = (length && width) ? `${length}L x ${width}W${thickness ? ` | ${thickness}MM` : ''}` : null;
+                    await index_1.prisma.piece.update({
+                        where: { id: pieceId },
+                        data: {
+                            sourceMaterialId: projMat.id,
+                            vendorName: usedSizeStr
+                        }
+                    });
+                }
+            }
+        }
+        if (slabId) {
+            await index_1.prisma.slab.update({
+                where: { id: slabId },
+                data: { inventoryId: inventoryId }
+            }).catch(() => { });
+        }
         const createdAt = date ? new Date(date) : new Date();
+        // Clean project and piece name remarks only
+        let outRemarks = projectName ? `${projectName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
         // Create OUT log for Used
         if (used > 0) {
             await index_1.prisma.inventoryLog.create({
@@ -201,7 +321,7 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
                     inventoryId: inventoryId,
                     type: 'OUT',
                     quantity: used,
-                    remarks: projectName ? `Project: ${projectName}` : 'Manual Deduction',
+                    remarks: outRemarks,
                     createdAt: createdAt
                 }
             });
@@ -291,6 +411,27 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                     where: { id: inventory.id },
                     data: { quantity: inventory.quantity + log.quantity }
                 });
+                // If log was for a piece, unlink piece sourceMaterialId
+                if (log.remarks) {
+                    const match = log.remarks.match(/Piece:\s*([^)]+)/);
+                    const pieceName = match && match[1] ? match[1].trim() : '';
+                    if (pieceName) {
+                        const p = await index_1.prisma.piece.findFirst({
+                            where: {
+                                OR: [
+                                    { productName: pieceName },
+                                    { productName: { contains: pieceName } }
+                                ]
+                            }
+                        });
+                        if (p) {
+                            await index_1.prisma.piece.update({
+                                where: { id: p.id },
+                                data: { sourceMaterialId: null, vendorName: null }
+                            }).catch(() => { });
+                        }
+                    }
+                }
             }
             else if (log.type === 'IN') {
                 // Remove stock

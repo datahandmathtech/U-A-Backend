@@ -4,17 +4,119 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const router = (0, express_1.Router)();
-// Get all distinct slab names
-router.get('/all-names', authMiddleware_1.authenticate, async (req, res) => {
+// Get all projects with slabs and pieces hierarchy for deduction selection
+router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const slabs = await index_1.prisma.slab.findMany({
-            select: { name: true },
-            distinct: ['name']
-        });
-        res.json(slabs.map((s) => s.name));
+        const [projects, outLogs] = await Promise.all([
+            index_1.prisma.project.findMany({
+                select: {
+                    id: true,
+                    name: true,
+                    projectId: true,
+                    clientName: true,
+                    slabs: {
+                        select: {
+                            id: true,
+                            name: true,
+                            size: true,
+                            pieces: {
+                                select: {
+                                    id: true,
+                                    pieceNumber: true,
+                                    productName: true,
+                                    size: true,
+                                    stage: true,
+                                    status: true,
+                                    sourceMaterialId: true,
+                                    vendorName: true
+                                }
+                            }
+                        }
+                    }
+                },
+                orderBy: { createdAt: 'desc' }
+            }),
+            index_1.prisma.inventoryLog.findMany({
+                where: { type: 'OUT' },
+                select: { remarks: true }
+            })
+        ]);
+        const activePieceRemarks = outLogs.map(l => l.remarks || '').join(' ');
+        const cleanProjects = projects.map(proj => ({
+            ...proj,
+            slabs: proj.slabs.map(slab => ({
+                ...slab,
+                pieces: slab.pieces.map(piece => {
+                    const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
+                    const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
+                    return {
+                        ...piece,
+                        sourceMaterialId: isActuallyLogged ? piece.sourceMaterialId : null,
+                        vendorName: isActuallyLogged ? piece.vendorName : null
+                    };
+                })
+            }))
+        }));
+        res.json(cleanProjects);
     }
     catch (error) {
-        res.status(500).json({ message: 'Error fetching slab names', error });
+        res.status(500).json({ message: 'Error fetching project hierarchy', error });
+    }
+});
+// Get all distinct slab names and project/production names
+router.get('/all-names', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const [slabs, projects, pieces] = await Promise.all([
+            index_1.prisma.slab.findMany({
+                select: {
+                    name: true,
+                    project: { select: { name: true, projectId: true } }
+                }
+            }),
+            index_1.prisma.project.findMany({
+                select: { name: true, projectId: true, clientName: true }
+            }),
+            index_1.prisma.piece.findMany({
+                select: {
+                    productName: true,
+                    slab: {
+                        select: {
+                            name: true,
+                            project: { select: { name: true, projectId: true } }
+                        }
+                    }
+                }
+            })
+        ]);
+        const namesSet = new Set();
+        // 1. Projects
+        projects.forEach(p => {
+            if (p.name) {
+                namesSet.add(p.name);
+            }
+        });
+        // 2. Slabs and Project - Slab combinations
+        slabs.forEach(s => {
+            if (s.name) {
+                namesSet.add(s.name);
+                if (s.project?.name) {
+                    namesSet.add(`${s.project.name} - ${s.name}`);
+                }
+            }
+        });
+        // 3. Pieces / Products from production
+        pieces.forEach(pc => {
+            if (pc.productName) {
+                namesSet.add(pc.productName);
+                if (pc.slab?.project?.name) {
+                    namesSet.add(`${pc.slab.project.name} - ${pc.productName}`);
+                }
+            }
+        });
+        res.json(Array.from(namesSet).filter(Boolean));
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Error fetching names', error });
     }
 });
 // Get all pieces across all slabs
@@ -23,6 +125,9 @@ router.get('/pieces', authMiddleware_1.authenticate, async (req, res) => {
         const pieces = await index_1.prisma.piece.findMany({
             include: {
                 logs: true,
+                sourceMaterial: {
+                    include: { inventory: true }
+                },
                 slab: {
                     include: {
                         project: { select: { name: true, projectId: true } }
@@ -46,7 +151,12 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
             orderBy: { createdAt: 'asc' },
             include: {
                 pieces: {
-                    include: { logs: true },
+                    include: {
+                        logs: true,
+                        sourceMaterial: {
+                            include: { inventory: true }
+                        }
+                    },
                     orderBy: { pieceNumber: 'asc' }
                 },
                 inventory: true
@@ -144,7 +254,7 @@ router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
                 usedQuantity += pieceArea;
                 piecesData.push({
                     slabId: String(id),
-                    pieceNumber: currentMaxPieceNumber + i + 1,
+                    pieceNumber: piecesArray[i].pieceNumber ? Number(piecesArray[i].pieceNumber) : (currentMaxPieceNumber + i + 1),
                     productName: piecesArray[i].name || productName || slab.name,
                     vendorName: vendorName || null,
                     size: piecesArray[i].size || size || null,
