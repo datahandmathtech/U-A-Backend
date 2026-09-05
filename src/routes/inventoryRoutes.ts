@@ -137,6 +137,9 @@ router.patch('/:id/stock', authenticate, async (req, res) => {
 router.get('/item-logs/:inventoryId', authenticate, async (req, res) => {
   try {
     const { inventoryId } = req.params;
+    const item = await prisma.inventory.findUnique({
+      where: { id: String(inventoryId) }
+    });
     const logs = await prisma.inventoryLog.findMany({
       where: { inventoryId: String(inventoryId) },
       orderBy: { createdAt: 'asc' }, // Ascending to calculate balance easily
@@ -146,8 +149,9 @@ router.get('/item-logs/:inventoryId', authenticate, async (req, res) => {
         }
       }
     });
-    res.json(logs);
+    res.json({ item, logs });
   } catch (error) {
+    console.error('Error fetching item logs:', error);
     res.status(500).json({ message: 'Server error fetching item logs' });
   }
 });
