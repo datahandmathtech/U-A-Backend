@@ -51,15 +51,29 @@ router.post('/login', async (req, res) => {
     try {
         const { email: emailOrStaffId, password } = req.body;
         console.log('Login attempt for:', emailOrStaffId);
-        const user = await index_1.prisma.user.findFirst({
+        const cleanInput = (emailOrStaffId || '').trim();
+        // Fast indexed path: Exact match on unique indexed fields (email, staffId)
+        let user = await index_1.prisma.user.findFirst({
             where: {
                 OR: [
-                    { email: { equals: emailOrStaffId, mode: 'insensitive' } },
-                    { staffId: { equals: emailOrStaffId, mode: 'insensitive' } },
-                    { name: { equals: emailOrStaffId, mode: 'insensitive' } }
+                    { email: cleanInput },
+                    { staffId: cleanInput },
+                    { email: cleanInput.toLowerCase() }
                 ]
             }
         });
+        // Fallback path: Case-insensitive search if exact lookup returned null
+        if (!user) {
+            user = await index_1.prisma.user.findFirst({
+                where: {
+                    OR: [
+                        { email: { equals: cleanInput, mode: 'insensitive' } },
+                        { staffId: { equals: cleanInput, mode: 'insensitive' } },
+                        { name: { equals: cleanInput, mode: 'insensitive' } }
+                    ]
+                }
+            });
+        }
         console.log('User found:', user ? user.email : 'None');
         if (!user) {
             return res.status(400).json({ message: 'Invalid credentials' });

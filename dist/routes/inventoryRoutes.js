@@ -14,18 +14,17 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const selectedFyYear = fyYear ? parseInt(fyYear, 10) : currentFyYear;
         const startOfFy = new Date(selectedFyYear, 3, 1); // April 1st
         const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
-        const inventory = await index_1.prisma.inventory.findMany({
-            orderBy: { createdAt: 'desc' }
-        });
-        const [logsBeforeFy, logsDuringFy] = await Promise.all([
-            // Logs before the FY to calculate Opening Stock correctly from total quantity
-            // Actually, opening stock = current quantity - (net IN during FY + net IN after FY) + (net OUT during FY + net OUT after FY)
-            // Or simpler: opening stock = current quantity - net movement from start of FY to now.
-            index_1.prisma.inventoryLog.findMany({
-                where: { createdAt: { gte: startOfFy } }
+        const [inventory, logsBeforeFy, logsDuringFy] = await Promise.all([
+            index_1.prisma.inventory.findMany({
+                orderBy: { createdAt: 'desc' }
             }),
             index_1.prisma.inventoryLog.findMany({
-                where: { createdAt: { gte: startOfFy, lte: endOfFy } }
+                where: { createdAt: { gte: startOfFy } },
+                select: { inventoryId: true, type: true, quantity: true }
+            }),
+            index_1.prisma.inventoryLog.findMany({
+                where: { createdAt: { gte: startOfFy, lte: endOfFy } },
+                select: { inventoryId: true, type: true, quantity: true }
             })
         ]);
         const enrichedInventory = inventory.map(item => {

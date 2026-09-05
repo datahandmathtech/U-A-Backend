@@ -150,28 +150,34 @@ router.patch('/:id/complete', authMiddleware_1.authenticate, async (req, res) =>
 // Fetch all active/unreturned OUT logs (transactionType: 'OUT', approvalStatus: 'approved', isReturned: false/null)
 router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const allApprovedOutLogs = await index_1.prisma.productionLog.findMany({
-            where: {
-                transactionType: 'OUT',
-                approvalStatus: 'approved',
-                OR: [
-                    { isReturned: false },
-                    { isReturned: null }
-                ]
-            },
-            orderBy: { createdAt: 'desc' },
-            include: {
-                worker: { select: { name: true, staffId: true } },
-                project: { select: { name: true, projectId: true } }
-            }
-        });
-        const pendingInLogs = await index_1.prisma.productionLog.findMany({
-            where: {
-                transactionType: 'IN',
-                approvalStatus: { in: ['pending', 'redo_in_progress'] },
-                parentLogId: { not: null }
-            }
-        });
+        const [allApprovedOutLogs, pendingInLogs] = await Promise.all([
+            index_1.prisma.productionLog.findMany({
+                where: {
+                    transactionType: 'OUT',
+                    approvalStatus: 'approved',
+                    OR: [
+                        { isReturned: false },
+                        { isReturned: null }
+                    ]
+                },
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    worker: { select: { name: true, staffId: true } },
+                    project: { select: { name: true, projectId: true } }
+                }
+            }),
+            index_1.prisma.productionLog.findMany({
+                where: {
+                    transactionType: 'IN',
+                    approvalStatus: { in: ['pending', 'redo_in_progress'] },
+                    parentLogId: { not: null }
+                },
+                select: {
+                    parentLogId: true,
+                    quantityProduced: true
+                }
+            })
+        ]);
         // Subtract pending quantities
         const activeOutLogs = allApprovedOutLogs.filter(log => {
             const pendingReturns = pendingInLogs

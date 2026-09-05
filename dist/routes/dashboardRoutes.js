@@ -29,25 +29,24 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 }
             };
         }
-        const totalLeads = await index_1.prisma.lead.count({ where: dateFilter });
-        const activeProjects = await index_1.prisma.project.count({ where: { status: 'in_progress', ...dateFilter } });
-        const invoices = await index_1.prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, balanceAmount: true } });
-        const totalRevenue = invoices.reduce((acc, curr) => acc + curr.totalAmount, 0);
-        const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + curr.balanceAmount, 0);
-        const readyForDispatch = await index_1.prisma.crate.count({ where: { status: 'packing', ...dateFilter } });
-        // Profitability Analysis
-        const laborContracts = await index_1.prisma.laborContract.findMany({ where: dateFilter });
-        const laborCost = laborContracts.reduce((acc, curr) => acc + curr.totalAmount, 0);
         // Expense date filter (it uses 'date' instead of 'createdAt')
         let expenseFilter = {};
         if (dateFilter.createdAt) {
             expenseFilter = { date: dateFilter.createdAt };
         }
-        const expenses = await index_1.prisma.expense.findMany({ where: expenseFilter });
+        const [totalLeads, activeProjects, invoices, readyForDispatch, laborContracts, expenses, electricity] = await Promise.all([
+            index_1.prisma.lead.count({ where: dateFilter }),
+            index_1.prisma.project.count({ where: { status: 'in_progress', ...dateFilter } }),
+            index_1.prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, balanceAmount: true } }),
+            index_1.prisma.crate.count({ where: { status: 'packing', ...dateFilter } }),
+            index_1.prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
+            index_1.prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
+            index_1.prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
+        ]);
+        const totalRevenue = invoices.reduce((acc, curr) => acc + curr.totalAmount, 0);
+        const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + curr.balanceAmount, 0);
+        const laborCost = laborContracts.reduce((acc, curr) => acc + curr.totalAmount, 0);
         const factoryExpenses = expenses.reduce((acc, curr) => acc + curr.amount, 0);
-        // Electricity uses month string (e.g. "2026-06"). It's hard to filter easily by exact dates, we'll try basic filtering
-        // or just fetch all and filter in memory since there's one per month
-        const electricity = await index_1.prisma.electricityLog.findMany();
         const filteredElec = electricity.filter(e => {
             if (!fy)
                 return true;
