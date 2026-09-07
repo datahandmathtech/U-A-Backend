@@ -6,13 +6,27 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
+// Ensure the optimal MongoDB SRV connection string is always used even if old .env is present on Hostinger
+let effectiveDbUrl = process.env.DATABASE_URL || '';
+if (!effectiveDbUrl || effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('iuq9w0n.mongodb.net')) {
+  effectiveDbUrl = 'mongodb+srv://yatree_admin:Mayank123@iuq9w0n.mongodb.net/Unnati-arts?authSource=admin&retryWrites=true&w=majority';
+  process.env.DATABASE_URL = effectiveDbUrl;
+  process.env.MONGO_URI = effectiveDbUrl;
+}
+
 const app = express();
 const port = process.env.PORT || 5000;
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url: effectiveDbUrl
+    }
+  }
+});
 
 // Eagerly connect to MongoDB to eliminate cold start delays
 prisma.$connect()
-  .then(() => console.log('✅ MongoDB connected successfully via Prisma'))
+  .then(() => console.log('✅ MongoDB connected successfully via Prisma (SRV)'))
   .catch((err: any) => console.error('❌ MongoDB initial connection warning:', err?.message || err));
 
 // Middleware
