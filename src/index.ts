@@ -7,10 +7,10 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-// Ensure the optimal MongoDB SRV connection string is always used even if old .env is present on Hostinger
+// Ensure the optimal MongoDB connection string with explicit timeout is always used on Hostinger
 let effectiveDbUrl = process.env.DATABASE_URL || '';
-if (!effectiveDbUrl || effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('iuq9w0n.mongodb.net')) {
-  effectiveDbUrl = 'mongodb+srv://yatree_admin:Mayank123@iuq9w0n.mongodb.net/Unnati-arts?authSource=admin&retryWrites=true&w=majority';
+if (!effectiveDbUrl || effectiveDbUrl.includes('iuq9w0n.mongodb.net') || effectiveDbUrl.includes('ac-n3u3fkt-shard')) {
+  effectiveDbUrl = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&authSource=admin&ssl=true&connectTimeoutMS=5000&serverSelectionTimeoutMS=5000&retryWrites=true&w=majority';
   process.env.DATABASE_URL = effectiveDbUrl;
   process.env.MONGO_URI = effectiveDbUrl;
 }
