@@ -13,6 +13,10 @@ dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = process.env.PORT || 5000;
 exports.prisma = new client_1.PrismaClient();
+// Eagerly connect to MongoDB to eliminate cold start delays
+exports.prisma.$connect()
+    .then(() => console.log('✅ MongoDB connected successfully via Prisma'))
+    .catch((err) => console.error('❌ MongoDB initial connection warning:', err?.message || err));
 // Middleware
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));

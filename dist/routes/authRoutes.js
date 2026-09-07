@@ -62,7 +62,7 @@ router.get('/diagnostics', async (req, res) => {
         const start = Date.now();
         const testQuery = Promise.race([
             index_1.prisma.user.findFirst({ select: { id: true } }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('DATABASE_CONNECTION_TIMEOUT_5_SECONDS')), 5000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DATABASE_CONNECTION_TIMEOUT_10_SECONDS')), 10000))
         ]);
         await testQuery;
         elapsed = Date.now() - start;

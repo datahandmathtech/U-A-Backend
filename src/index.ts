@@ -10,6 +10,11 @@ const app = express();
 const port = process.env.PORT || 5000;
 export const prisma = new PrismaClient();
 
+// Eagerly connect to MongoDB to eliminate cold start delays
+prisma.$connect()
+  .then(() => console.log('✅ MongoDB connected successfully via Prisma'))
+  .catch((err: any) => console.error('❌ MongoDB initial connection warning:', err?.message || err));
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
