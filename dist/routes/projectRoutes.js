@@ -209,11 +209,40 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
 router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const updateData = req.body;
+        const rawData = { ...req.body };
+        // Remove relation / virtual fields that do not exist on the Prisma Project model
+        delete rawData.id;
+        delete rawData._id;
+        delete rawData.products;
+        delete rawData.slabs;
+        delete rawData.quotations;
+        delete rawData.invoices;
+        delete rawData.assignedTo;
+        delete rawData.createdAt;
+        delete rawData.updatedAt;
+        const updateData = {};
+        const allowedKeys = [
+            'name', 'description', 'status', 'isDirectWorkOrder', 'startDate', 'deadline',
+            'progressPercentage', 'assignedToId', 'totalPieces', 'completedPieces',
+            'deliveryDate', 'clientHandle', 'clientName', 'clientContact', 'clientEmail',
+            'customerPhoto', 'enquirySource', 'location', 'requirements', 'designFiles',
+            'receiptUrl', 'workOrderUrl'
+        ];
+        for (const key of allowedKeys) {
+            if (rawData[key] !== undefined) {
+                updateData[key] = rawData[key];
+            }
+        }
         if (updateData.startDate)
             updateData.startDate = new Date(updateData.startDate);
         if (updateData.deadline)
             updateData.deadline = new Date(updateData.deadline);
+        if (updateData.deliveryDate)
+            updateData.deliveryDate = new Date(updateData.deliveryDate);
+        if (updateData.totalPieces !== undefined)
+            updateData.totalPieces = parseInt(updateData.totalPieces) || 0;
+        if (updateData.completedPieces !== undefined)
+            updateData.completedPieces = parseInt(updateData.completedPieces) || 0;
         const updated = await index_1.prisma.project.update({
             where: { id: String(id) },
             data: updateData,
@@ -245,7 +274,8 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
         res.json(updated);
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error updating project' });
+        console.error("Error updating project:", error);
+        res.status(500).json({ message: error.message || 'Server error updating project' });
     }
 });
 // Delete project
