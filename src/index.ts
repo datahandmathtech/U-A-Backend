@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
@@ -114,19 +115,26 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-import fs from 'fs';
-
-// Serve static files from the 'public' folder (you need to copy frontend dist here on live server)
+// Serve static files from multiple potential directories
 app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static(path.join(__dirname, '../public_html')));
+app.use(express.static(path.join(__dirname, '..')));
 
 // Catch-all route
 app.use((req, res) => {
   if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
     res.status(404).json({ error: 'API endpoint not found: ' + req.path });
   } else {
-    const indexPath = path.join(__dirname, '../public/index.html');
-    if (fs.existsSync(indexPath)) {
-      res.sendFile(indexPath);
+    const publicIndexPath = path.join(__dirname, '../public/index.html');
+    const publicHtmlIndexPath = path.join(__dirname, '../public_html/index.html');
+    const rootIndexPath = path.join(__dirname, '../index.html');
+
+    if (fs.existsSync(publicIndexPath)) {
+      res.sendFile(publicIndexPath);
+    } else if (fs.existsSync(publicHtmlIndexPath)) {
+      res.sendFile(publicHtmlIndexPath);
+    } else if (fs.existsSync(rootIndexPath)) {
+      res.sendFile(rootIndexPath);
     } else {
       res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
     }

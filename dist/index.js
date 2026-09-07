@@ -8,6 +8,7 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
 // Ensure the optimal MongoDB SRV connection string is always used even if old .env is present on Hostinger
@@ -111,18 +112,27 @@ app.get('/api/health', async (req, res) => {
         });
     }
 });
-const fs_1 = __importDefault(require("fs"));
-// Serve static files from the 'public' folder (you need to copy frontend dist here on live server)
+// Serve static files from multiple potential directories
 app.use(express_1.default.static(path_1.default.join(__dirname, '../public')));
+app.use(express_1.default.static(path_1.default.join(__dirname, '../public_html')));
+app.use(express_1.default.static(path_1.default.join(__dirname, '..')));
 // Catch-all route
 app.use((req, res) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
         res.status(404).json({ error: 'API endpoint not found: ' + req.path });
     }
     else {
-        const indexPath = path_1.default.join(__dirname, '../public/index.html');
-        if (fs_1.default.existsSync(indexPath)) {
-            res.sendFile(indexPath);
+        const publicIndexPath = path_1.default.join(__dirname, '../public/index.html');
+        const publicHtmlIndexPath = path_1.default.join(__dirname, '../public_html/index.html');
+        const rootIndexPath = path_1.default.join(__dirname, '../index.html');
+        if (fs_1.default.existsSync(publicIndexPath)) {
+            res.sendFile(publicIndexPath);
+        }
+        else if (fs_1.default.existsSync(publicHtmlIndexPath)) {
+            res.sendFile(publicHtmlIndexPath);
+        }
+        else if (fs_1.default.existsSync(rootIndexPath)) {
+            res.sendFile(rootIndexPath);
         }
         else {
             res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
