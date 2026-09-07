@@ -27,16 +27,13 @@ router.get('/diagnostics', async (req, res) => {
 
   try {
     const start = Date.now();
-    const testQuery = Promise.race([
-      prisma.user.findFirst({ select: { id: true } }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('DATABASE_CONNECTION_TIMEOUT_10_SECONDS')), 10000))
-    ]);
-    await testQuery;
+    const user = await prisma.user.findFirst({ select: { id: true, email: true } });
     elapsed = Date.now() - start;
     dbStatus = 'CONNECTED_OK';
+    dbError = user ? `Found user: ${user.email}` : 'No users found';
   } catch (err: any) {
     dbStatus = 'FAILED';
-    dbError = err.message;
+    dbError = (err?.name || 'Error') + ': ' + (err?.message || String(err));
   }
 
   const net = await import('net');
