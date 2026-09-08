@@ -1,0 +1,1 @@
+var e=(e,t=400)=>e?e.includes(`cloudinary.com`)&&!e.includes(`/upload/q_auto`)?e.replace(`/upload/`,`/upload/q_auto,f_auto,w_${t}/`):e:``,t=e=>e?e.includes(`cloudinary.com`)&&!e.includes(`/upload/q_auto`)?e.replace(`/upload/`,`/upload/q_auto,f_auto/`):e:``;export{e as n,t};
