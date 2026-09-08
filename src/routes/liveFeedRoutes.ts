@@ -1,11 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
-import { autoSplitActiveMachineLogs } from '../utils/machineLogHelper';
 
 const router = Router();
 
-// Get live factory feed (Machine Logs for Selected Date)
+// Get live factory feed (Machine Logs for Selected Date) - Optimized for high performance
 router.get('/', authenticate, async (req, res) => {
   try {
     const dateParam = req.query.date as string;
@@ -16,21 +15,78 @@ router.get('/', authenticate, async (req, res) => {
     const endOfDay = new Date(queryDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const liveFeedLogs = await prisma.machineLog.findMany({
-      where: {
-        startTime: { lte: endOfDay },
+    const isToday = queryDate.toDateString() === new Date().toDateString();
+
+    let dateWhere: any;
+    if (isToday) {
+      // For today: logs active today, or completed today, or active within recent window
+      const recentWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
+      dateWhere = {
         OR: [
-          { endTime: { gte: startOfDay } },
-          { endTime: null },
-          { status: 'active' }
+          { startTime: { gte: startOfDay, lte: endOfDay } },
+          { endTime: { gte: startOfDay, lte: endOfDay } },
+          { status: 'active', startTime: { gte: recentWindow } }
         ]
+      };
+    } else {
+      // For past date: logs that were started on that date
+      dateWhere = {
+        startTime: { gte: startOfDay, lte: endOfDay }
+      };
+    }
+
+    const liveFeedLogs = await prisma.machineLog.findMany({
+      where: dateWhere,
+      select: {
+        id: true,
+        machineId: true,
+        projectId: true,
+        productId: true,
+        productName: true,
+        startTime: true,
+        endTime: true,
+        estimatedHours: true,
+        downtime: true,
+        quantityProduced: true,
+        operatorId: true,
+        machinePhotoUrl: true,
+        unitPhotoUrl: true,
+        softwarePhotoUrl: true,
+        endMachinePhotoUrl: true,
+        endUnitPhotoUrl: true,
+        endSoftwarePhotoUrl: true,
+        status: true,
+        approvalStatus: true,
+        remarks: true,
+        createdAt: true,
+        machine: {
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            status: true
+          }
+        },
+        operator: {
+          select: {
+            id: true,
+            name: true,
+            staffId: true,
+            role: true,
+            department: true
+          }
+        },
+        project: {
+          select: {
+            id: true,
+            name: true,
+            projectId: true,
+            clientName: true
+          }
+        }
       },
-      include: { 
-        machine: true,
-        operator: { select: { name: true, staffId: true, role: true, department: true } },
-        project: { select: { name: true, projectId: true, clientName: true } }
-      },
-      orderBy: { startTime: 'desc' }
+      orderBy: { startTime: 'desc' },
+      take: 100
     });
 
     res.json(liveFeedLogs);

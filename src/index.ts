@@ -117,10 +117,22 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Static file caching headers (immutable caching for hashed assets, no-cache for index.html)
+const staticOptions = {
+  maxAge: '30d',
+  setHeaders: (res: express.Response, filePath: string) => {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    } else if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+};
+
 // Serve static files from multiple potential directories
-app.use(express.static(path.join(__dirname, '../public')));
-app.use(express.static(path.join(__dirname, '../public_html')));
-app.use(express.static(path.join(__dirname, '..')));
+app.use(express.static(path.join(__dirname, '../public'), staticOptions));
+app.use(express.static(path.join(__dirname, '../public_html'), staticOptions));
+app.use(express.static(path.join(__dirname, '..'), { maxAge: '1h' }));
 
 // Catch-all route
 app.use((req, res) => {
@@ -130,6 +142,8 @@ app.use((req, res) => {
     const publicIndexPath = path.join(__dirname, '../public/index.html');
     const publicHtmlIndexPath = path.join(__dirname, '../public_html/index.html');
     const rootIndexPath = path.join(__dirname, '../index.html');
+
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
     if (fs.existsSync(publicIndexPath)) {
       res.sendFile(publicIndexPath);
