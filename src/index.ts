@@ -8,11 +8,11 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-// Ensure the optimal MongoDB connection string with explicit authSource and pooling
-const DEFAULT_MONGO_URI = 'mongodb+srv://yatree_admin:Mayank123@iuq9w0n.mongodb.net/Unnati-arts?authSource=admin&retryWrites=true&w=majority';
+// Ensure the optimal MongoDB connection string with explicit authSource and timeouts
+const DEFAULT_MONGO_URI = 'mongodb+srv://yatree_admin:Mayank123@iuq9w0n.mongodb.net/Unnati-arts?authSource=admin&retryWrites=true&w=majority&connectTimeoutMS=10000&socketTimeoutMS=15000&serverSelectionTimeoutMS=10000';
 let effectiveDbUrl = process.env.DATABASE_URL || DEFAULT_MONGO_URI;
 
-if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || !effectiveDbUrl.includes('authSource=admin')) {
+if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || !effectiveDbUrl.includes('authSource=admin') || !effectiveDbUrl.includes('connectTimeoutMS')) {
   effectiveDbUrl = DEFAULT_MONGO_URI;
 }
 process.env.DATABASE_URL = effectiveDbUrl;
@@ -101,7 +101,11 @@ const mountRoutes = (prefix = '') => {
 
 mountRoutes('/api');
 
-// Basic Route
+// Ping & Health Routes
+app.get(['/api/ping', '/ping'], (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString(), port });
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     // Check database connectivity
@@ -162,7 +166,7 @@ app.use((req, res) => {
 import { initCronJobs } from './utils/cronJobs';
 
 // Start Server
-app.listen(port, () => {
+app.listen(Number(port), '0.0.0.0', () => {
   console.log(`Server is running on port ${port}`);
   initCronJobs();
   console.log('Cron jobs initialized');
