@@ -11,59 +11,30 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: { 
         assignedTo: { select: { name: true } },
-        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
-        slabs: { 
-          select: { 
-            pieces: { 
-              select: { stage: true, status: true } 
-            } 
-          } 
-        }
+        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 }
       }
     });
 
     const enrichedProjects = projects.map(p => {
-      let calculatedTotalPieces = 0;
+      let calculatedTotalPieces = p.totalPieces || 0;
       if (p.quotations && p.quotations.length > 0) {
         const firstQuote = p.quotations[0];
         if (firstQuote && firstQuote.products) {
           const products = firstQuote.products as any[];
-          if (Array.isArray(products)) {
-            calculatedTotalPieces = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+          if (Array.isArray(products) && products.length > 0) {
+            const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+            if (sum > 0) calculatedTotalPieces = sum;
           }
         }
       }
 
-      // Completed Pieces = Pieces that have reached the final stage (Dispatch) and are marked completed
-      let calculatedCompletedPieces = 0;
-      if (p.slabs && p.slabs.length > 0) {
-        for (const slab of p.slabs) {
-          if (slab.pieces && slab.pieces.length > 0) {
-            for (const piece of slab.pieces) {
-              const stage = (piece.stage || '').toLowerCase();
-              const status = (piece.status || '').toLowerCase();
-              if (stage === 'dispatch' && status === 'completed') {
-                calculatedCompletedPieces += 1;
-              }
-            }
-          }
-        }
-      }
-
-      // We remove the included relations from the response to save payload size, 
-      // but attach the calculated fields.
-      const { quotations, slabs, ...projectData } = p;
-
-      // Cap completed pieces to not exceed total pieces
-      if (calculatedTotalPieces > 0 && calculatedCompletedPieces > calculatedTotalPieces) {
-        calculatedCompletedPieces = calculatedTotalPieces;
-      }
+      const { quotations, ...projectData } = p;
 
       return {
         ...projectData,
         products: p.quotations?.[0]?.products || [],
-        totalPieces: calculatedTotalPieces > 0 ? calculatedTotalPieces : projectData.totalPieces,
-        completedPieces: calculatedCompletedPieces > 0 ? calculatedCompletedPieces : projectData.completedPieces,
+        totalPieces: calculatedTotalPieces,
+        completedPieces: projectData.completedPieces || 0,
         deliveryDate: projectData.deadline || projectData.deliveryDate,
         clientHandle: projectData.clientHandle || projectData.assignedTo?.name
       };
@@ -71,6 +42,7 @@ router.get('/', authenticate, async (req, res) => {
 
     res.json(enrichedProjects);
   } catch (error) {
+    console.error('Projects fetch error:', error);
     res.status(500).json({ message: 'Server error fetching projects' });
   }
 });
