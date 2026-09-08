@@ -294,17 +294,52 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                 returnedQty: 0
             }
         });
+        // If log is auto-approved (e.g. direct Dispatch), automatically update pieces
+        if (newLog.approvalStatus === 'approved') {
+            try {
+                let effectivePieceIds = newLog.pieceIds && newLog.pieceIds.length > 0 ? newLog.pieceIds : [];
+                if (effectivePieceIds.length === 0 && newLog.slabId) {
+                    const slabPieces = await index_1.prisma.piece.findMany({
+                        where: { slabId: String(newLog.slabId) },
+                        orderBy: { pieceNumber: 'asc' }
+                    });
+                    if (slabPieces.length > 0) {
+                        effectivePieceIds = slabPieces.slice(0, Number(newLog.quantityProduced) || slabPieces.length).map((p) => p.id);
+                    }
+                }
+                if (effectivePieceIds.length > 0) {
+                    const cleanStage = (newLog.stage || 'Dispatch').replace(' Work', '').trim();
+                    for (const pieceId of effectivePieceIds) {
+                        await index_1.prisma.piece.update({
+                            where: { id: pieceId },
+                            data: {
+                                status: 'completed',
+                                stage: cleanStage
+                            }
+                        });
+                        await index_1.prisma.pieceLog.create({
+                            data: {
+                                pieceId: pieceId,
+                                stage: newLog.stage,
+                                status: 'completed',
+                                operatorId: newLog.workerId,
+                                remarks: 'Auto-logged from Direct Dispatch',
+                                vehicleNumber: newLog.vehicleNumber || undefined,
+                                endTime: new Date()
+                            }
+                        });
+                    }
+                }
+            }
+            catch (pieceErr) {
+                console.warn('Could not auto-update pieces for approved log:', pieceErr);
+            }
+        }
         // Update parent log for IN transactions (Partial returns support)
         if (newLog.transactionType === 'IN' && newLog.parentLogId) {
             try {
                 const parentLog = await index_1.prisma.productionLog.findUnique({ where: { id: newLog.parentLogId } });
                 if (parentLog) {
-                    // Calculate new returned qty
-                    // But wait, the IN log requires admin approval. Should we update the balance now or after approval?
-                    // The old code updated `isReturned` only if `newLog.approvalStatus === 'approved'`.
-                    // Let's update it immediately so staff sees it, or wait for approval.
-                    // Usually, it's safer to just track it based on the IN logs' sum later.
-                    // For now, let's update it immediately.
                     const newReturnedQty = (parentLog.returnedQty || 0) + (newLog.quantityProduced || 0);
                     const isFullyReturned = newReturnedQty >= (parentLog.quantityProduced || 0);
                     await index_1.prisma.productionLog.update({
@@ -356,8 +391,8 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
             return res.status(404).json({ message: 'Log not found' });
         let updatedLog;
         if (splits && splits.length > 0 && approvalStatus === 'approved') {
-            const totalSplitQty = splits.reduce((acc, s) => acc + Number(s.qty), 0);
-            const remainingQty = (originalLog.quantityProduced || 0) - totalSplitQty;
+            const totalSplitQty = splits.reduce((acc, s) => acc + Number(s.qty || 0), 0);
+            const remainingQty = (Number(originalLog.quantityProduced) || 0) - totalSplitQty;
             const { id: _id, createdAt, updatedAt, ...restLogData } = originalLog;
             if (remainingQty > 0) {
                 // Partial approval: Keep original log pending with remainder, create new logs for all splits
@@ -375,41 +410,52 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                             productName: split.productName ? String(split.productName) : undefined,
                             slabId: split.slabId ? String(split.slabId) : undefined,
                             pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
-                            quantityProduced: Number(split.qty),
+                            quantityProduced: Number(split.qty || 1),
                             remarks: remarks ? String(remarks) : originalLog.remarks
                         }
                     });
                     let effectivePieceIds = split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [];
                     if (effectivePieceIds.length === 0 && split.slabId) {
-                        const slabPieces = await index_1.prisma.piece.findMany({
-                            where: { slabId: String(split.slabId) },
-                            orderBy: { pieceNumber: 'asc' }
-                        });
-                        if (slabPieces.length > 0) {
-                            effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                        try {
+                            const slabPieces = await index_1.prisma.piece.findMany({
+                                where: { slabId: String(split.slabId) },
+                                orderBy: { pieceNumber: 'asc' }
+                            });
+                            if (slabPieces.length > 0) {
+                                effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                            }
+                        }
+                        catch (pFindErr) {
+                            console.warn('Could not find pieces for slabId:', split.slabId, pFindErr);
                         }
                     }
                     if (effectivePieceIds.length > 0) {
                         for (const pieceId of effectivePieceIds) {
-                            const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
-                            await index_1.prisma.piece.update({
-                                where: { id: pieceId },
-                                data: {
-                                    status: pieceStatus,
-                                    stage: split.stage ? split.stage : originalLog.stage.replace(' Work', '')
-                                }
-                            });
-                            await index_1.prisma.pieceLog.create({
-                                data: {
-                                    pieceId: pieceId,
-                                    stage: originalLog.stage,
-                                    status: pieceStatus,
-                                    operatorId: originalLog.workerId,
-                                    remarks: 'Auto-logged from Material/Machine Approval',
-                                    vehicleNumber: originalLog.vehicleNumber || undefined,
-                                    endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
-                                }
-                            });
+                            try {
+                                const cleanStage = (split.stage ? split.stage : originalLog.stage).replace(' Work', '').trim();
+                                const pieceStatus = 'completed';
+                                await index_1.prisma.piece.update({
+                                    where: { id: pieceId },
+                                    data: {
+                                        status: pieceStatus,
+                                        stage: cleanStage
+                                    }
+                                });
+                                await index_1.prisma.pieceLog.create({
+                                    data: {
+                                        pieceId: pieceId,
+                                        stage: originalLog.stage,
+                                        status: pieceStatus,
+                                        operatorId: originalLog.workerId,
+                                        remarks: 'Auto-logged from Material/Machine Approval',
+                                        vehicleNumber: originalLog.vehicleNumber || undefined,
+                                        endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
+                                    }
+                                });
+                            }
+                            catch (pieceErr) {
+                                console.warn(`Failed to update piece ${pieceId}:`, pieceErr);
+                            }
                         }
                     }
                 }
@@ -426,7 +472,7 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                         productName: firstSplit.productName ? String(firstSplit.productName) : undefined,
                         slabId: firstSplit.slabId ? String(firstSplit.slabId) : undefined,
                         pieceIds: firstSplit.pieceIds && firstSplit.pieceIds.length > 0 ? firstSplit.pieceIds : [],
-                        quantityProduced: Number(firstSplit.qty),
+                        quantityProduced: Number(firstSplit.qty || originalLog.quantityProduced),
                         remarks: remarks ? String(remarks) : undefined
                     }
                 });
@@ -441,7 +487,7 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                             productName: split.productName ? String(split.productName) : undefined,
                             slabId: split.slabId ? String(split.slabId) : undefined,
                             pieceIds: split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [],
-                            quantityProduced: Number(split.qty),
+                            quantityProduced: Number(split.qty || 1),
                             remarks: remarks ? String(remarks) : undefined
                         }
                     });
@@ -450,76 +496,90 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 for (const split of splits) {
                     let effectivePieceIds = split.pieceIds && split.pieceIds.length > 0 ? split.pieceIds : [];
                     if (effectivePieceIds.length === 0 && split.slabId) {
-                        const slabPieces = await index_1.prisma.piece.findMany({
-                            where: { slabId: String(split.slabId) },
-                            orderBy: { pieceNumber: 'asc' }
-                        });
-                        if (slabPieces.length > 0) {
-                            effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                        try {
+                            const slabPieces = await index_1.prisma.piece.findMany({
+                                where: { slabId: String(split.slabId) },
+                                orderBy: { pieceNumber: 'asc' }
+                            });
+                            if (slabPieces.length > 0) {
+                                effectivePieceIds = slabPieces.slice(0, Number(split.qty) || slabPieces.length).map((p) => p.id);
+                            }
+                        }
+                        catch (pFindErr) {
+                            console.warn('Could not find slab pieces:', split.slabId, pFindErr);
                         }
                     }
                     if (effectivePieceIds.length > 0) {
                         for (const pieceId of effectivePieceIds) {
-                            const pieceStatus = originalLog.transactionType === 'OUT' ? 'active' : 'completed';
-                            await index_1.prisma.piece.update({
-                                where: { id: pieceId },
-                                data: {
-                                    status: pieceStatus,
-                                    stage: originalLog.stage.replace(' Work', '')
-                                }
-                            });
-                            await index_1.prisma.pieceLog.create({
-                                data: {
-                                    pieceId: pieceId,
-                                    stage: originalLog.stage,
-                                    status: pieceStatus,
-                                    operatorId: originalLog.workerId,
-                                    remarks: 'Auto-logged from Material/Machine Approval',
-                                    vehicleNumber: originalLog.vehicleNumber || undefined,
-                                    endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
-                                }
-                            });
+                            try {
+                                const cleanStage = (split.stage ? split.stage : originalLog.stage).replace(' Work', '').trim();
+                                const pieceStatus = 'completed';
+                                await index_1.prisma.piece.update({
+                                    where: { id: pieceId },
+                                    data: {
+                                        status: pieceStatus,
+                                        stage: cleanStage
+                                    }
+                                });
+                                await index_1.prisma.pieceLog.create({
+                                    data: {
+                                        pieceId: pieceId,
+                                        stage: originalLog.stage,
+                                        status: pieceStatus,
+                                        operatorId: originalLog.workerId,
+                                        remarks: 'Auto-logged from Material/Machine Approval',
+                                        vehicleNumber: originalLog.vehicleNumber || undefined,
+                                        endTime: originalLog.transactionType === 'OUT' ? undefined : new Date()
+                                    }
+                                });
+                            }
+                            catch (pieceErr) {
+                                console.warn(`Failed to update piece ${pieceId}:`, pieceErr);
+                            }
                         }
                     }
                     // Auto-deduct from Inventory for completed OUT items (or Production Work)
                     if (originalLog.transactionType === 'OUT' || originalLog.stage === 'Production Work') {
-                        const materialNameToMatch = String(split.productName || originalLog.productName || '').toLowerCase();
-                        if (materialNameToMatch) {
-                            // Find matching inventory items
-                            const inventories = await index_1.prisma.inventory.findMany({});
-                            const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
-                                inv.itemName.toLowerCase().includes(materialNameToMatch));
-                            if (match) {
-                                const qtyToDeduct = Number(split.qty);
-                                if (qtyToDeduct > 0) {
-                                    await index_1.prisma.inventory.update({
-                                        where: { id: match.id },
-                                        data: { quantity: { decrement: qtyToDeduct } }
-                                    });
-                                    const proj = split.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(split.projectId) } }) : null;
-                                    // Update ProjectMaterial for Waste Ledger
-                                    if (split.projectId) {
-                                        const pm = await index_1.prisma.projectMaterial.findFirst({
-                                            where: { projectId: String(split.projectId), inventoryId: match.id, isConsumed: false }
+                        try {
+                            const materialNameToMatch = String(split.productName || originalLog.productName || '').toLowerCase();
+                            if (materialNameToMatch) {
+                                const inventories = await index_1.prisma.inventory.findMany({});
+                                const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
+                                    inv.itemName.toLowerCase().includes(materialNameToMatch));
+                                if (match) {
+                                    const qtyToDeduct = Number(split.qty);
+                                    if (qtyToDeduct > 0) {
+                                        await index_1.prisma.inventory.update({
+                                            where: { id: match.id },
+                                            data: { quantity: { decrement: qtyToDeduct } }
                                         });
-                                        if (pm) {
-                                            const waste = Math.max(0, pm.quantity - qtyToDeduct);
-                                            await index_1.prisma.projectMaterial.update({
-                                                where: { id: pm.id },
-                                                data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                        const proj = split.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(split.projectId) } }) : null;
+                                        if (split.projectId) {
+                                            const pm = await index_1.prisma.projectMaterial.findFirst({
+                                                where: { projectId: String(split.projectId), inventoryId: match.id, isConsumed: false }
                                             });
+                                            if (pm) {
+                                                const waste = Math.max(0, pm.quantity - qtyToDeduct);
+                                                await index_1.prisma.projectMaterial.update({
+                                                    where: { id: pm.id },
+                                                    data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                                });
+                                            }
                                         }
+                                        await index_1.prisma.inventoryLog.create({
+                                            data: {
+                                                inventoryId: match.id,
+                                                type: 'OUT',
+                                                quantity: qtyToDeduct,
+                                                remarks: `Used in Project: ${proj?.name || 'Unknown'}`
+                                            }
+                                        });
                                     }
-                                    await index_1.prisma.inventoryLog.create({
-                                        data: {
-                                            inventoryId: match.id,
-                                            type: 'OUT',
-                                            quantity: qtyToDeduct,
-                                            remarks: `Used in Project: ${proj?.name || 'Unknown'}`
-                                        }
-                                    });
                                 }
                             }
+                        }
+                        catch (invErr) {
+                            console.warn('Inventory deduction warning in split approval:', invErr);
                         }
                     }
                 }
@@ -527,45 +587,50 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
             // If this is an IN log, apply the returns to pending OUT logs (FIFO)
             if (originalLog.transactionType === 'IN') {
                 for (const split of splits) {
-                    let remainingToReturn = Number(split.qty);
-                    const whereClause = {
-                        transactionType: 'OUT',
-                        approvalStatus: 'approved',
-                        stage: originalLog.stage,
-                    };
-                    if (originalLog.workerId) {
-                        whereClause.workerId = originalLog.workerId;
-                    }
-                    else if (originalLog.vendorName) {
-                        whereClause.vendorName = originalLog.vendorName;
-                    }
-                    const pendingOutLogs = await index_1.prisma.productionLog.findMany({
-                        where: whereClause,
-                        orderBy: { createdAt: 'asc' }
-                    });
-                    for (const outLog of pendingOutLogs) {
-                        if (remainingToReturn <= 0)
-                            break;
-                        const qtyProduced = outLog.quantityProduced || 0;
-                        const returnedQty = outLog.returnedQty || 0;
-                        const pendingQty = qtyProduced - returnedQty;
-                        if (pendingQty > 0) {
-                            const returnAmount = Math.min(pendingQty, remainingToReturn);
-                            const updatedPieceIds = Array.from(new Set([...(outLog.pieceIds || []), ...(split.pieceIds || [])]));
-                            await index_1.prisma.productionLog.update({
-                                where: { id: outLog.id },
-                                data: {
-                                    returnedQty: returnedQty + returnAmount,
-                                    isReturned: (returnedQty + returnAmount) >= qtyProduced,
-                                    projectId: split.projectId ? String(split.projectId) : undefined,
-                                    productId: split.productId ? String(split.productId) : undefined,
-                                    productName: split.productName ? String(split.productName) : undefined,
-                                    slabId: split.slabId ? String(split.slabId) : undefined,
-                                    pieceIds: updatedPieceIds
-                                }
-                            });
-                            remainingToReturn -= returnAmount;
+                    try {
+                        let remainingToReturn = Number(split.qty);
+                        const whereClause = {
+                            transactionType: 'OUT',
+                            approvalStatus: 'approved',
+                            stage: originalLog.stage,
+                        };
+                        if (originalLog.workerId) {
+                            whereClause.workerId = originalLog.workerId;
                         }
+                        else if (originalLog.vendorName) {
+                            whereClause.vendorName = originalLog.vendorName;
+                        }
+                        const pendingOutLogs = await index_1.prisma.productionLog.findMany({
+                            where: whereClause,
+                            orderBy: { createdAt: 'asc' }
+                        });
+                        for (const outLog of pendingOutLogs) {
+                            if (remainingToReturn <= 0)
+                                break;
+                            const qtyProduced = Number(outLog.quantityProduced) || 0;
+                            const returnedQty = Number(outLog.returnedQty) || 0;
+                            const pendingQty = qtyProduced - returnedQty;
+                            if (pendingQty > 0) {
+                                const returnAmount = Math.min(pendingQty, remainingToReturn);
+                                const updatedPieceIds = Array.from(new Set([...(outLog.pieceIds || []), ...(split.pieceIds || [])]));
+                                await index_1.prisma.productionLog.update({
+                                    where: { id: outLog.id },
+                                    data: {
+                                        returnedQty: returnedQty + returnAmount,
+                                        isReturned: (returnedQty + returnAmount) >= qtyProduced,
+                                        projectId: split.projectId ? String(split.projectId) : undefined,
+                                        productId: split.productId ? String(split.productId) : undefined,
+                                        productName: split.productName ? String(split.productName) : undefined,
+                                        slabId: split.slabId ? String(split.slabId) : undefined,
+                                        pieceIds: updatedPieceIds
+                                    }
+                                });
+                                remainingToReturn -= returnAmount;
+                            }
+                        }
+                    }
+                    catch (fifoErr) {
+                        console.warn('FIFO return tracking warning:', fifoErr);
                     }
                 }
             }
@@ -583,50 +648,54 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
             });
             // Auto-deduct from Inventory for completed OUT items (or Production Work)
             if (approvalStatus === 'approved' && (updatedLog.transactionType === 'OUT' || updatedLog.stage === 'Production Work')) {
-                const materialNameToMatch = String(updatedLog.productName || originalLog.productName || '').toLowerCase();
-                if (materialNameToMatch) {
-                    const inventories = await index_1.prisma.inventory.findMany({});
-                    const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
-                        inv.itemName.toLowerCase().includes(materialNameToMatch));
-                    if (match) {
-                        const qtyToDeduct = Number(updatedLog.quantityProduced);
-                        if (qtyToDeduct > 0) {
-                            await index_1.prisma.inventory.update({
-                                where: { id: match.id },
-                                data: { quantity: { decrement: qtyToDeduct } }
-                            });
-                            const proj = updatedLog.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(updatedLog.projectId) } }) : null;
-                            // Update ProjectMaterial for Waste Ledger
-                            if (updatedLog.projectId) {
-                                const pm = await index_1.prisma.projectMaterial.findFirst({
-                                    where: { projectId: String(updatedLog.projectId), inventoryId: match.id, isConsumed: false }
+                try {
+                    const materialNameToMatch = String(updatedLog.productName || originalLog.productName || '').toLowerCase();
+                    if (materialNameToMatch) {
+                        const inventories = await index_1.prisma.inventory.findMany({});
+                        const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
+                            inv.itemName.toLowerCase().includes(materialNameToMatch));
+                        if (match) {
+                            const qtyToDeduct = Number(updatedLog.quantityProduced);
+                            if (qtyToDeduct > 0) {
+                                await index_1.prisma.inventory.update({
+                                    where: { id: match.id },
+                                    data: { quantity: { decrement: qtyToDeduct } }
                                 });
-                                if (pm) {
-                                    const waste = Math.max(0, pm.quantity - qtyToDeduct);
-                                    await index_1.prisma.projectMaterial.update({
-                                        where: { id: pm.id },
-                                        data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                const proj = updatedLog.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(updatedLog.projectId) } }) : null;
+                                if (updatedLog.projectId) {
+                                    const pm = await index_1.prisma.projectMaterial.findFirst({
+                                        where: { projectId: String(updatedLog.projectId), inventoryId: match.id, isConsumed: false }
                                     });
+                                    if (pm) {
+                                        const waste = Math.max(0, pm.quantity - qtyToDeduct);
+                                        await index_1.prisma.projectMaterial.update({
+                                            where: { id: pm.id },
+                                            data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                        });
+                                    }
                                 }
+                                await index_1.prisma.inventoryLog.create({
+                                    data: {
+                                        inventoryId: match.id,
+                                        type: 'OUT',
+                                        quantity: qtyToDeduct,
+                                        remarks: `Used in Project Approval: ${proj?.name || 'Unknown'}`
+                                    }
+                                });
                             }
-                            await index_1.prisma.inventoryLog.create({
-                                data: {
-                                    inventoryId: match.id,
-                                    type: 'OUT',
-                                    quantity: qtyToDeduct,
-                                    remarks: `Used in Project Approval: ${proj?.name || 'Unknown'}`
-                                }
-                            });
                         }
                     }
                 }
+                catch (invErr) {
+                    console.warn('Inventory deduction warning in non-split approval:', invErr);
+                }
             }
         }
-        if (updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
+        if (updatedLog && updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
             try {
                 if (updatedLog.stage === 'Production Work') {
                     const totalApprovedQty = splits && splits.length > 0 && approvalStatus === 'approved'
-                        ? splits.reduce((acc, s) => acc + Number(s.qty), 0)
+                        ? splits.reduce((acc, s) => acc + Number(s.qty || 0), 0)
                         : updatedLog.quantityProduced;
                     const combinedProductName = splits && splits.length > 0 && approvalStatus === 'approved'
                         ? splits.map((s) => s.productName).filter(Boolean).join(' | ')
@@ -643,21 +712,23 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                     });
                 }
                 else {
-                    await index_1.prisma.productionLog.update({
-                        where: { id: updatedLog.parentLogId },
-                        data: { isReturned: true }
-                    });
+                    const parentLogExists = await index_1.prisma.productionLog.findUnique({ where: { id: updatedLog.parentLogId } });
+                    if (parentLogExists) {
+                        await index_1.prisma.productionLog.update({
+                            where: { id: updatedLog.parentLogId },
+                            data: { isReturned: true }
+                        });
+                    }
                 }
             }
             catch (err) {
                 console.warn(`Failed to update parentLogId ${updatedLog.parentLogId}:`, err);
             }
         }
-        res.json(updatedLog);
+        res.json(updatedLog || originalLog);
     }
     catch (error) {
         console.error("Material Log Error:", error);
-        require('fs').writeFileSync('C:\\Users\\ABHAY\\.gemini\\antigravity\\brain\\ef5a82a2-0db7-4636-a7d5-c9f7739376d2\\scratch\\error.log', String(error) + '\n' + (error.stack || ''));
         res.status(500).json({ message: error.message || 'Server error updating material log approval' });
     }
 });
@@ -742,12 +813,12 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         // If pieceIds were provided and the log is approved, update the pieces!
         if (pieceIds && Array.isArray(pieceIds) && log.approvalStatus === 'approved') {
             for (const pieceId of pieceIds) {
-                const pieceStatus = log.transactionType === 'OUT' ? 'active' : 'completed';
+                const pieceStatus = 'completed';
                 await index_1.prisma.piece.update({
                     where: { id: String(pieceId) },
                     data: {
                         status: pieceStatus,
-                        stage: log.stage.replace(' Work', '')
+                        stage: log.stage.replace(' Work', '').trim()
                     }
                 });
             }
