@@ -785,6 +785,7 @@ router.get('/approved-logs', authenticate, async (req, res) => {
     const approvedLogs = await prisma.productionLog.findMany({
       where: { approvalStatus: 'approved' },
       orderBy: { createdAt: 'desc' },
+      take: 200,
       include: {
         worker: { select: { name: true } },
         project: { select: { name: true, projectId: true, clientName: true } }

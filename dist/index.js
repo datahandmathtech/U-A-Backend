@@ -6,15 +6,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.prisma = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const compression_1 = __importDefault(require("compression"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-// Ensure the optimal MongoDB connection string with explicit timeout is always used on Hostinger
+// Ensure the optimal MongoDB connection string with explicit timeout and pooling is always used
 let effectiveDbUrl = process.env.DATABASE_URL || '';
 if (!effectiveDbUrl || effectiveDbUrl.includes('iuq9w0n.mongodb.net') || effectiveDbUrl.includes('ac-n3u3fkt-shard')) {
-    effectiveDbUrl = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&authSource=admin&ssl=true&connectTimeoutMS=5000&serverSelectionTimeoutMS=5000&retryWrites=true&w=majority';
+    effectiveDbUrl = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&authSource=admin&ssl=true&connectTimeoutMS=5000&serverSelectionTimeoutMS=5000&maxPoolSize=30&minPoolSize=5&retryWrites=true&w=majority';
     process.env.DATABASE_URL = effectiveDbUrl;
     process.env.MONGO_URI = effectiveDbUrl;
 }
@@ -32,6 +33,7 @@ exports.prisma.$connect()
     .then(() => console.log('✅ MongoDB connected successfully via Prisma (SRV)'))
     .catch((err) => console.error('❌ MongoDB initial connection warning:', err?.message || err));
 // Middleware
+app.use((0, compression_1.default)());
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
