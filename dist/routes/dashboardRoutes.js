@@ -29,24 +29,65 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 }
             };
         }
-        // Expense date filter (it uses 'date' instead of 'createdAt')
+        // Expense date filter (uses 'date' if present)
         let expenseFilter = {};
         if (dateFilter.createdAt) {
             expenseFilter = { date: dateFilter.createdAt };
         }
-        const [totalLeads, activeProjects, invoices, readyForDispatch, laborContracts, expenses, electricity] = await Promise.all([
-            index_1.prisma.lead.count({ where: dateFilter }),
-            index_1.prisma.project.count({ where: { status: 'in_progress', ...dateFilter } }),
-            index_1.prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, balanceAmount: true } }),
-            index_1.prisma.crate.count({ where: { status: 'packing', ...dateFilter } }),
-            index_1.prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
-            index_1.prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
-            index_1.prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
+        const [totalLeads, activeProjects, pendingQuotations, readyForDispatch, invoices, laborContracts, expenses, electricity] = await Promise.all([
+            // 1. Total Enquiries (CRM Pipeline: enquiry, design_sharing, quotation, advance_payment)
+            index_1.prisma.project.count({
+                where: {
+                    status: { in: ['enquiry', 'design_sharing', 'quotation', 'advance_payment'] },
+                    ...dateFilter
+                }
+            }),
+            // 2. Active Work Orders (Production Pipeline: shop_drawing, material_planning, production, work_order)
+            index_1.prisma.project.count({
+                where: {
+                    status: { in: ['shop_drawing', 'material_planning', 'production', 'work_order'] },
+                    ...dateFilter
+                }
+            }),
+            // 3. Pending Quotations (Enquiries currently in quotation stage)
+            index_1.prisma.project.count({
+                where: {
+                    status: 'quotation',
+                    ...dateFilter
+                }
+            }),
+            // 4. Dispatch Ready (Completed projects)
+            index_1.prisma.project.count({
+                where: {
+                    status: 'completed',
+                    ...dateFilter
+                }
+            }),
+            // 5. Financial invoices summary
+            index_1.prisma.invoice.findMany({
+                where: dateFilter,
+                select: { totalAmount: true, advancePaid: true, balanceAmount: true }
+            }),
+            // 6. Labor contracts
+            index_1.prisma.laborContract.findMany({
+                where: dateFilter,
+                select: { totalAmount: true }
+            }),
+            // 7. Factory operational expenses
+            index_1.prisma.expense.findMany({
+                where: expenseFilter,
+                select: { amount: true }
+            }),
+            // 8. Electricity logs
+            index_1.prisma.electricityLog.findMany({
+                select: { month: true, totalBill: true }
+            })
         ]);
-        const totalRevenue = invoices.reduce((acc, curr) => acc + curr.totalAmount, 0);
-        const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + curr.balanceAmount, 0);
-        const laborCost = laborContracts.reduce((acc, curr) => acc + curr.totalAmount, 0);
-        const factoryExpenses = expenses.reduce((acc, curr) => acc + curr.amount, 0);
+        const totalRevenue = invoices.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
+        const advancePaidTotal = invoices.reduce((acc, curr) => acc + (curr.advancePaid || 0), 0);
+        const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + (curr.balanceAmount || 0), 0);
+        const laborCost = laborContracts.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
+        const factoryExpenses = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0);
         const filteredElec = electricity.filter(e => {
             if (!fy)
                 return true;
@@ -61,14 +102,16 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 return eYear === startYear;
             return eYear === endYear;
         });
-        const electricityCost = filteredElec.reduce((acc, curr) => acc + curr.totalBill, 0);
+        const electricityCost = filteredElec.reduce((acc, curr) => acc + (curr.totalBill || 0), 0);
         const netProfit = totalRevenue - (laborCost + factoryExpenses + electricityCost);
         res.json({
             totalLeads,
             activeProjects,
-            totalRevenue,
-            pendingInvoicesTotal,
+            pendingQuotations,
             readyForDispatch,
+            totalRevenue,
+            advancePaidTotal,
+            pendingInvoicesTotal: advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal,
             profitability: {
                 laborCost,
                 factoryExpenses,
@@ -78,7 +121,7 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         });
     }
     catch (error) {
-        console.error(error);
+        console.error('Dashboard summary error:', error);
         res.status(500).json({ message: 'Server error fetching dashboard summary', error: error.message });
     }
 });
