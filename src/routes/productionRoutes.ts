@@ -232,6 +232,12 @@ router.get('/rejected-logs', authenticate, async (req, res) => {
 });
 
 // Submit new Material IN/OUT log
+const toValidObjectId = (val: any): string | undefined => {
+  if (!val || typeof val !== 'string') return undefined;
+  const trimmed = val.trim();
+  return /^[0-9a-fA-F]{24}$/.test(trimmed) ? trimmed : undefined;
+};
+
 router.post('/material-log', authenticate, async (req, res) => {
   try {
     let { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds, requiresMachine } = req.body;
@@ -242,13 +248,13 @@ router.post('/material-log', authenticate, async (req, res) => {
       transactionType = 'IN';
     }
 
-    let projectId = undefined;
-    if (parentLogId) {
+    let projectId: string | undefined = undefined;
+    if (parentLogId && toValidObjectId(parentLogId)) {
       const parentLog = await prisma.productionLog.findUnique({
-        where: { id: parentLogId }
+        where: { id: String(parentLogId).trim() }
       });
       if (parentLog) {
-        projectId = parentLog.projectId || undefined;
+        projectId = toValidObjectId(parentLog.projectId);
         productName = parentLog.productName || productName;
         productId = parentLog.productId || productId;
         slabId = parentLog.slabId || slabId;
@@ -257,7 +263,7 @@ router.post('/material-log', authenticate, async (req, res) => {
         stage = parentLog.stage || stage;
       }
     } else {
-      projectId = req.body.projectId;
+      projectId = toValidObjectId(req.body.projectId);
     }
 
     // Handle multiple vendors for OUT/IN transactions
@@ -265,21 +271,21 @@ router.post('/material-log', authenticate, async (req, res) => {
       const newLogs = await Promise.all(vendors.map(async (v: any) => {
         return prisma.productionLog.create({
           data: {
-            projectId,
+            projectId: toValidObjectId(projectId),
             stage: v.stage || stage,
             quantityProduced: v.qty ? parseFloat(v.qty) : 0,
             transactionType,
             startPhotos,
-            workerId: workerId?.trim() || undefined,
+            workerId: toValidObjectId(workerId),
             vendorName: v.vendorName?.trim() || undefined,
-            vendorId: v.vendorId?.trim() || undefined,
+            vendorId: toValidObjectId(v.vendorId),
             vehicleNumber: vehicleNumber?.trim() || undefined,
             challanNumber: challanNumber?.trim() || undefined,
             boxCode: req.body.boxCode?.trim() || undefined,
             productId: productId?.trim() || undefined,
             productName: productName?.trim() || undefined,
-            slabId: slabId?.trim() || undefined,
-            pieceIds: v.pieceIds || pieceIds || [],
+            slabId: toValidObjectId(slabId),
+            pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : []),
             approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
@@ -293,22 +299,22 @@ router.post('/material-log', authenticate, async (req, res) => {
     // Single vendor or regular OUT/IN transaction
     const newLog = await prisma.productionLog.create({
       data: {
-        projectId,
+        projectId: toValidObjectId(projectId),
         stage,
         quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0,
         transactionType,
         startPhotos,
-        workerId: workerId?.trim() || undefined,
+        workerId: toValidObjectId(workerId),
         vendorName: vendorName?.trim() || undefined,
-        vendorId: vendorId?.trim() || undefined,
+        vendorId: toValidObjectId(vendorId),
         vehicleNumber: vehicleNumber?.trim() || undefined,
         challanNumber: challanNumber?.trim() || undefined,
         boxCode: req.body.boxCode?.trim() || undefined,
-        parentLogId: parentLogId?.trim() || undefined,
+        parentLogId: toValidObjectId(parentLogId),
         productId: productId?.trim() || undefined,
         productName: productName?.trim() || undefined,
-        slabId: slabId?.trim() || undefined,
-        pieceIds: pieceIds || [],
+        slabId: toValidObjectId(slabId),
+        pieceIds: Array.isArray(pieceIds) ? pieceIds : [],
         approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
         status: 'completed',
         isReturned: false,
