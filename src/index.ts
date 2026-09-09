@@ -109,22 +109,35 @@ mountRoutes('/api');
 
 // Ping & Health Routes
 app.get(['/api/ping', '/ping'], (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString(), port });
+  res.json({ 
+    status: 'ok', 
+    version: 'v2.2-ipv4-primary',
+    time: new Date().toISOString(), 
+    port,
+    dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing'
+  });
 });
 
 app.get('/api/health', async (req, res) => {
+  const start = Date.now();
   try {
-    // Check database connectivity
-    await prisma.user.count();
+    // Check database connectivity with 8 second timeout
+    const userCount = await Promise.race([
+      prisma.user.count(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Database query timed out after 8000ms')), 8000))
+    ]);
     res.json({ 
       status: 'ok', 
-      message: 'Unnati ERP API is running and database is connected successfully.' 
+      message: 'Unnati ERP API is running and database is connected successfully.',
+      userCount,
+      responseTimeMs: Date.now() - start
     });
   } catch (error: any) {
     res.status(500).json({ 
       status: 'error', 
       message: 'Unnati ERP API is running, but database connection failed.',
-      error: error.message || error
+      error: error.message || error,
+      responseTimeMs: Date.now() - start
     });
   }
 });
