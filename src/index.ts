@@ -8,12 +8,12 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-// Ensure the optimal MongoDB connection string with explicit authSource and timeouts
-const DEFAULT_MONGO_URI = 'mongodb+srv://yatree_admin:Mayank123@iuq9w0n.mongodb.net/Unnati-arts?authSource=admin&retryWrites=true&w=majority&connectTimeoutMS=10000&socketTimeoutMS=15000&serverSelectionTimeoutMS=10000';
-let effectiveDbUrl = process.env.DATABASE_URL || DEFAULT_MONGO_URI;
+// Ensure the optimal MongoDB connection string with direct 3-node replica set (avoids Hostinger DNS SRV issues)
+const DIRECT_MONGO_URI = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&connectTimeoutMS=10000&socketTimeoutMS=15000&serverSelectionTimeoutMS=10000';
+let effectiveDbUrl = process.env.DATABASE_URL || DIRECT_MONGO_URI;
 
-if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || !effectiveDbUrl.includes('authSource=admin') || !effectiveDbUrl.includes('connectTimeoutMS')) {
-  effectiveDbUrl = DEFAULT_MONGO_URI;
+if (!effectiveDbUrl.includes('atlas-icn4hi-shard-0') || !effectiveDbUrl.includes('authSource=admin')) {
+  effectiveDbUrl = DIRECT_MONGO_URI;
 }
 process.env.DATABASE_URL = effectiveDbUrl;
 process.env.MONGO_URI = effectiveDbUrl;
