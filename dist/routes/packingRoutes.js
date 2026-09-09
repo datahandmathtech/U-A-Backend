@@ -4,14 +4,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const client_1 = require("@prisma/client");
+const index_1 = require("../index");
 const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
-const prisma = new client_1.PrismaClient();
 // Get packing items for a project
 router.get('/:projectId', auth_1.authenticate, async (req, res) => {
     try {
-        const items = await prisma.packingItem.findMany({
+        const items = await index_1.prisma.packingItem.findMany({
             where: { projectId: String(req.params.projectId) },
             orderBy: { createdAt: 'desc' }
         });
@@ -27,10 +26,10 @@ router.post('/:projectId', auth_1.authenticate, async (req, res) => {
     try {
         const projectId = String(req.params.projectId);
         const { items } = req.body;
-        await prisma.packingItem.deleteMany({ where: { projectId } });
+        await index_1.prisma.packingItem.deleteMany({ where: { projectId } });
         const created = [];
         for (const item of items) {
-            const newItem = await prisma.packingItem.create({
+            const newItem = await index_1.prisma.packingItem.create({
                 data: {
                     projectId,
                     box: item.box || '',
@@ -52,7 +51,7 @@ router.post('/:projectId', auth_1.authenticate, async (req, res) => {
 // Delete a single packing item
 router.delete('/:id', auth_1.authenticate, async (req, res) => {
     try {
-        await prisma.packingItem.delete({ where: { id: String(req.params.id) } });
+        await index_1.prisma.packingItem.delete({ where: { id: String(req.params.id) } });
         res.json({ message: 'Deleted' });
     }
     catch (error) {

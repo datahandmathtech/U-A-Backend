@@ -1,8 +1,7 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../index';
 import { authenticate } from '../middleware/auth';
 
-const prisma = new PrismaClient();
 const router = Router();
 
 // Get all waste materials

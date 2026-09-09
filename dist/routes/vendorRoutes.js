@@ -4,14 +4,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const client_1 = require("@prisma/client");
+const index_1 = require("../index");
 const router = express_1.default.Router();
-const prisma = new client_1.PrismaClient();
 // Get all vendors
 router.get('/', async (req, res) => {
     try {
         const { month, fy } = req.query;
-        const vendors = await prisma.vendor.findMany({
+        const vendors = await index_1.prisma.vendor.findMany({
             where: { status: 'active' },
             orderBy: { createdAt: 'desc' }
         });
@@ -30,7 +29,7 @@ router.get('/', async (req, res) => {
             startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
             endOfFY = new Date(`${currentYear + 1}-03-31T23:59:59.999Z`);
         }
-        const allLogs = await prisma.productionLog.findMany({
+        const allLogs = await index_1.prisma.productionLog.findMany({
             where: {
                 vendorId: { in: vendors.map(v => v.id) },
                 createdAt: { gte: startOfFY, lte: endOfFY }
@@ -91,7 +90,7 @@ router.get('/:id/ledger', async (req, res) => {
         const currentYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
         const startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
         const endOfFY = new Date(`${currentYear + 1}-03-31T23:59:59.999Z`);
-        const logs = await prisma.productionLog.findMany({
+        const logs = await index_1.prisma.productionLog.findMany({
             where: {
                 vendorId: id,
                 createdAt: { gte: startOfFY, lte: endOfFY }
@@ -131,7 +130,7 @@ router.get('/:id/ledger', async (req, res) => {
 router.post('/', async (req, res) => {
     try {
         const { name, contact, address, services } = req.body;
-        const vendor = await prisma.vendor.create({
+        const vendor = await index_1.prisma.vendor.create({
             data: { name, contact, address, services }
         });
         res.status(201).json(vendor);
@@ -146,7 +145,7 @@ router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { name, contact, address, services, status } = req.body;
-        const vendor = await prisma.vendor.update({
+        const vendor = await index_1.prisma.vendor.update({
             where: { id },
             data: { name, contact, address, services, status }
         });
@@ -161,7 +160,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        await prisma.vendor.update({
+        await index_1.prisma.vendor.update({
             where: { id },
             data: { status: 'inactive' }
         });

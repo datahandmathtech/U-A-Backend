@@ -1,12 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.autoSplitActiveMachineLogs = autoSplitActiveMachineLogs;
-const client_1 = require("@prisma/client");
-const prisma = new client_1.PrismaClient();
+const index_1 = require("../index");
 async function autoSplitActiveMachineLogs() {
     try {
         // Find all active logs
-        const activeLogs = await prisma.machineLog.findMany({
+        const activeLogs = await index_1.prisma.machineLog.findMany({
             where: { status: 'active' }
         });
         const now = new Date();
@@ -21,7 +20,7 @@ async function autoSplitActiveMachineLogs() {
                 if (endOfDay < now) {
                     // This log crosses midnight!
                     // 1. Close the current log at 23:59:59.999 of its day
-                    await prisma.machineLog.update({
+                    await index_1.prisma.machineLog.update({
                         where: { id: logId },
                         data: {
                             endTime: endOfDay,
@@ -30,13 +29,13 @@ async function autoSplitActiveMachineLogs() {
                     });
                     // Increment machine total run hours
                     const runHours = (endOfDay.getTime() - logStart.getTime()) / (1000 * 60 * 60);
-                    await prisma.machine.update({
+                    await index_1.prisma.machine.update({
                         where: { id: log.machineId },
                         data: { totalRunHours: { increment: runHours } }
                     });
                     // 2. Start a new log for the next day at 00:00:00.000
                     const nextDayStart = new Date(endOfDay.getTime() + 1); // 1 ms after 23:59:59.999 is 00:00:00.000 of next day
-                    const newLog = await prisma.machineLog.create({
+                    const newLog = await index_1.prisma.machineLog.create({
                         data: {
                             machineId: log.machineId,
                             projectId: log.projectId,

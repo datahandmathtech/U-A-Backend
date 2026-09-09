@@ -1,8 +1,7 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../index';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Get drawings for a project
 router.get('/:projectId', async (req, res) => {

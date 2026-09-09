@@ -1,9 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const client_1 = require("@prisma/client");
+const index_1 = require("../index");
 const auth_1 = require("../middleware/auth");
-const prisma = new client_1.PrismaClient();
 const router = (0, express_1.Router)();
 // Get all waste materials
 router.get('/', auth_1.authenticate, async (req, res) => {
@@ -22,7 +21,7 @@ router.get('/', auth_1.authenticate, async (req, res) => {
             logWhereClause.createdAt = { gte: startDate, lt: endDate };
         }
         // 1. Fetch from ProjectMaterial
-        const wasteMaterials = await prisma.projectMaterial.findMany({
+        const wasteMaterials = await index_1.prisma.projectMaterial.findMany({
             where: pmWhereClause,
             include: {
                 project: { select: { name: true, projectId: true } },
@@ -31,7 +30,7 @@ router.get('/', auth_1.authenticate, async (req, res) => {
             orderBy: { addedAt: 'desc' }
         });
         // 2. Fetch from InventoryLog
-        const wasteLogs = await prisma.inventoryLog.findMany({
+        const wasteLogs = await index_1.prisma.inventoryLog.findMany({
             where: logWhereClause,
             include: {
                 inventory: { select: { itemName: true, type: true, supplier: true } }
