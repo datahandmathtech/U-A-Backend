@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
@@ -302,7 +303,7 @@ router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
 router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, size, cost, requiredStages, status } = req.body;
+        const { name, size, cost, requiredStages, status, inventoryId } = req.body;
         const updateData = {};
         if (name !== undefined)
             updateData.name = name;
@@ -310,18 +311,27 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
             updateData.size = size;
         if (cost !== undefined)
             updateData.cost = Number(cost) || 0;
-        if (requiredStages !== undefined)
-            updateData.requiredStages = requiredStages;
         if (status !== undefined)
             updateData.status = status;
+        if (requiredStages !== undefined) {
+            updateData.requiredStages = Array.isArray(requiredStages)
+                ? requiredStages.map(s => String(s).trim()).filter(Boolean)
+                : [];
+        }
+        if (inventoryId !== undefined) {
+            updateData.inventoryId = (inventoryId && typeof inventoryId === 'string' && inventoryId.length === 24) ? inventoryId : null;
+        }
         const updatedSlab = await index_1.prisma.slab.update({
             where: { id: String(id) },
             data: updateData
         });
+        // Invalidate caches
+        fastCache_1.fastCache.invalidate('all_projects');
         res.json(updatedSlab);
     }
     catch (error) {
-        res.status(500).json({ message: 'Server error updating slab' });
+        console.error('Error updating slab:', error);
+        res.status(500).json({ message: 'Server error updating slab', error: error?.message || error });
     }
 });
 // Delete a slab

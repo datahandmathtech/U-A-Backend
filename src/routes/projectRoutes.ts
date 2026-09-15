@@ -77,72 +77,55 @@ router.post('/', authenticate, async (req, res) => {
   try {
     const { name, description, status, startDate, deadline, assignedToId, clientName, clientContact, clientEmail, enquirySource, location, requirements, createdAt, customerPhoto, totalPieces, completedPieces, deliveryDate, clientHandle, isDirectWorkOrder } = req.body;
     
-    // Auto-generate project ID (e.g. U-A-01) resetting per Financial Year
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth(); // 0-indexed (April is 3)
-    const fyStartYear = currentMonth >= 3 ? currentYear : currentYear - 1;
-    const fyStartDate = new Date(fyStartYear, 3, 1); // April 1st
-
-    const latestProject = await prisma.project.findFirst({
-      where: {
-        createdAt: {
-          gte: fyStartDate
-        },
-        projectId: { startsWith: 'U-A-' }
-      },
-      orderBy: { createdAt: 'desc' }
+    // Auto-generate project ID (e.g. U-A-01, U-A-13) safely in a single scan
+    const allProjects = await prisma.project.findMany({
+      select: { projectId: true }
     });
 
-    let nextNum = 1;
-    if (latestProject && latestProject.projectId) {
-      const match = latestProject.projectId.match(/U-A-(\d+)/);
+    let maxNum = 0;
+    allProjects.forEach(p => {
+      const match = p.projectId ? p.projectId.match(/U-A-(\d+)/) : null;
       if (match && match[1]) {
-        nextNum = parseInt(match[1]) + 1;
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
       }
-    }
-    
-    // To be absolutely safe against collisions from manual edits or deletions not caught by latestProject
-    // We will query if this exact ID exists. If it does, we increment.
-    let projectId = `U-A-${String(nextNum).padStart(2, '0')}`;
-    let exists = await prisma.project.findUnique({ where: { projectId } });
-    while (exists) {
-      nextNum++;
-      projectId = `U-A-${String(nextNum).padStart(2, '0')}`;
-      exists = await prisma.project.findUnique({ where: { projectId } });
-    }
+    });
+
+    const nextNum = maxNum + 1;
+    const projectId = `U-A-${String(nextNum).padStart(2, '0')}`;
+    const finalName = (name && name.trim()) ? name.trim() : `${(clientName || 'New Client').trim()} - Enquiry`;
 
     const newProject = await prisma.project.create({
       data: {
         projectId,
-        name,
-        description,
-        clientName,
-        clientContact,
-        clientEmail,
-        enquirySource,
-        location,
-        requirements,
-        createdAt: createdAt ? new Date(createdAt) : undefined,
+        name: finalName,
+        description: description || requirements || '',
+        clientName: clientName || 'Unnamed Client',
+        clientContact: clientContact || '',
+        clientEmail: clientEmail || '',
+        enquirySource: enquirySource || 'WhatsApp',
+        location: location || '',
+        requirements: requirements || description || '',
+        createdAt: createdAt ? new Date(createdAt) : new Date(),
         status: status || 'enquiry',
         isDirectWorkOrder: isDirectWorkOrder || false,
         startDate: startDate ? new Date(startDate) : new Date(),
         deadline: deadline ? new Date(deadline) : null,
-        assignedToId: assignedToId || undefined,
-        customerPhoto,
-        totalPieces: totalPieces ? parseInt(totalPieces) : 0,
-        completedPieces: completedPieces ? parseInt(completedPieces) : 0,
+        assignedToId: (assignedToId && typeof assignedToId === 'string' && assignedToId.length === 24) ? assignedToId : undefined,
+        customerPhoto: customerPhoto || null,
+        totalPieces: totalPieces ? parseInt(totalPieces, 10) : 0,
+        completedPieces: completedPieces ? parseInt(completedPieces, 10) : 0,
         deliveryDate: deliveryDate ? new Date(deliveryDate) : null,
-        clientHandle
+        clientHandle: clientHandle || null
       }
     });
     
     fastCache.invalidate('all_projects');
     fastCache.invalidate('dashboard_summary');
     res.status(201).json(newProject);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating project:', error);
-    res.status(500).json({ message: 'Server error creating project' });
+    res.status(500).json({ message: 'Server error creating project', error: error?.message || error });
   }
 });
 

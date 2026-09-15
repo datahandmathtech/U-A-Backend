@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
@@ -327,22 +328,36 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, size, cost, requiredStages, status } = req.body;
+    const { name, size, cost, requiredStages, status, inventoryId } = req.body;
     
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (size !== undefined) updateData.size = size;
     if (cost !== undefined) updateData.cost = Number(cost) || 0;
-    if (requiredStages !== undefined) updateData.requiredStages = requiredStages;
     if (status !== undefined) updateData.status = status;
+    
+    if (requiredStages !== undefined) {
+      updateData.requiredStages = Array.isArray(requiredStages) 
+        ? requiredStages.map(s => String(s).trim()).filter(Boolean)
+        : [];
+    }
+
+    if (inventoryId !== undefined) {
+      updateData.inventoryId = (inventoryId && typeof inventoryId === 'string' && inventoryId.length === 24) ? inventoryId : null;
+    }
 
     const updatedSlab = await prisma.slab.update({
       where: { id: String(id) },
       data: updateData
     });
+    
+    // Invalidate caches
+    fastCache.invalidate('all_projects');
+    
     res.json(updatedSlab);
-  } catch (error) {
-    res.status(500).json({ message: 'Server error updating slab' });
+  } catch (error: any) {
+    console.error('Error updating slab:', error);
+    res.status(500).json({ message: 'Server error updating slab', error: error?.message || error });
   }
 });
 
