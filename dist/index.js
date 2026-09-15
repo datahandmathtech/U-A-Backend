@@ -100,12 +100,14 @@ const mountRoutes = (prefix = '') => {
 mountRoutes('/api');
 // Ping & Health Routes
 app.get(['/api/ping', '/ping'], (req, res) => {
+    const maskedUrl = (effectiveDbUrl || '').replace(/:([^:@]+)@/, ':****@');
     res.json({
         status: 'ok',
-        version: 'v2.2-ipv4-primary',
+        version: 'v2.3-diag',
         time: new Date().toISOString(),
         port,
-        dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing'
+        dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing',
+        dbUrl: maskedUrl
     });
 });
 app.get('/api/health', async (req, res) => {
