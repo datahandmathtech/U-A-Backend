@@ -334,6 +334,28 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         res.status(500).json({ message: 'Server error updating slab', error: error?.message || error });
     }
 });
+// Bulk update required stages for multiple slabs
+router.patch('/bulk-stages', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { slabIds, requiredStages } = req.body;
+        if (!Array.isArray(slabIds) || slabIds.length === 0) {
+            return res.status(400).json({ message: 'No slabs specified' });
+        }
+        const cleanStages = Array.isArray(requiredStages)
+            ? requiredStages.map(s => String(s).trim()).filter(Boolean)
+            : [];
+        await index_1.prisma.slab.updateMany({
+            where: { id: { in: slabIds.map(String) } },
+            data: { requiredStages: cleanStages }
+        });
+        fastCache_1.fastCache.invalidate('all_projects');
+        res.json({ message: `Updated stages for ${slabIds.length} slabs`, count: slabIds.length });
+    }
+    catch (error) {
+        console.error('Error bulk updating slab stages:', error);
+        res.status(500).json({ message: 'Server error bulk updating slab stages', error: error?.message || error });
+    }
+});
 // Delete a slab
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
