@@ -1,16 +1,21 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
 // Get invoices
 router.get('/', authenticate, async (req, res) => {
   try {
+    const cached = fastCache.get('all_invoices');
+    if (cached) return res.json(cached);
+
     const invoices = await prisma.invoice.findMany({
       orderBy: { createdAt: 'desc' },
       include: { project: { select: { projectId: true, name: true } } }
     });
+    fastCache.set('all_invoices', invoices, 120);
     res.json(invoices);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching invoices' });
@@ -54,6 +59,8 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_invoices');
+    fastCache.invalidate('dashboard_summary');
     res.status(201).json(newInvoice);
   } catch (error) {
     console.error('Invoice creation error:', error);

@@ -14,7 +14,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const machines = await index_1.prisma.machine.findMany({
             orderBy: { createdAt: 'desc' }
         });
-        fastCache_1.fastCache.set('all_machines', machines, 15);
+        fastCache_1.fastCache.set('all_machines', machines, 120);
         res.json(machines);
     }
     catch (error) {

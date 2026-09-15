@@ -14,7 +14,7 @@ router.get('/', authenticate, async (req, res) => {
     const machines = await prisma.machine.findMany({
       orderBy: { createdAt: 'desc' }
     });
-    fastCache.set('all_machines', machines, 15);
+    fastCache.set('all_machines', machines, 120);
     res.json(machines);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching machines' });

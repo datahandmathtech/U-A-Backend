@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../index';
+import { fastCache } from '../utils/fastCache';
 
 const router = express.Router();
 
@@ -7,6 +8,10 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const { month, fy } = req.query;
+    const cacheKey = `vendors_stats_${fy || 'default'}_${month || 'all'}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const vendors = await prisma.vendor.findMany({
       where: { status: 'active' },
       orderBy: { createdAt: 'desc' }
@@ -83,6 +88,7 @@ router.get('/', async (req, res) => {
       };
     });
 
+    fastCache.set(cacheKey, vendorStats, 120);
     res.json(vendorStats);
   } catch (error) {
     console.error(error);
@@ -94,6 +100,10 @@ router.get('/', async (req, res) => {
 router.get('/:id/ledger', async (req, res) => {
   try {
     const { id } = req.params;
+    const cacheKey = `vendor_ledger_${id}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const today = new Date();
     const currentYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
     const startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
@@ -132,6 +142,7 @@ router.get('/:id/ledger', async (req, res) => {
       };
     });
 
+    fastCache.set(cacheKey, ledgerEntries, 120);
     res.json(ledgerEntries);
   } catch (error) {
     console.error(error);
@@ -146,6 +157,7 @@ router.post('/', async (req, res) => {
     const vendor = await prisma.vendor.create({
       data: { name, contact, address, services }
     });
+    fastCache.invalidate('vendors_stats');
     res.status(201).json(vendor);
   } catch (error) {
     console.error(error);
@@ -162,6 +174,8 @@ router.put('/:id', async (req, res) => {
       where: { id },
       data: { name, contact, address, services, status }
     });
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate(`vendor_ledger_${id}`);
     res.json(vendor);
   } catch (error) {
     console.error(error);
@@ -177,6 +191,8 @@ router.delete('/:id', async (req, res) => {
       where: { id },
       data: { status: 'inactive' }
     });
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate(`vendor_ledger_${id}`);
     res.json({ success: true });
   } catch (error) {
     console.error(error);

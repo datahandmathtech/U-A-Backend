@@ -1,16 +1,21 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
 // Get all leads
 router.get('/', authenticate, async (req, res) => {
   try {
+    const cached = fastCache.get('all_leads');
+    if (cached) return res.json(cached);
+
     const leads = await prisma.lead.findMany({
       orderBy: { createdAt: 'desc' },
       include: { assignedTo: { select: { name: true } } }
     });
+    fastCache.set('all_leads', leads, 120);
     res.json(leads);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching leads' });
@@ -36,6 +41,7 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_leads');
     res.status(201).json(newLead);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating lead' });
@@ -53,6 +59,7 @@ router.patch('/:id/status', authenticate, async (req, res) => {
       data: { status }
     });
     
+    fastCache.invalidate('all_leads');
     res.json(updatedLead);
   } catch (error) {
     res.status(500).json({ message: 'Server error updating lead' });

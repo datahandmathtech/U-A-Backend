@@ -5,11 +5,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const index_1 = require("../index");
+const fastCache_1 = require("../utils/fastCache");
 const router = express_1.default.Router();
 // Get all vendors
 router.get('/', async (req, res) => {
     try {
         const { month, fy } = req.query;
+        const cacheKey = `vendors_stats_${fy || 'default'}_${month || 'all'}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         const vendors = await index_1.prisma.vendor.findMany({
             where: { status: 'active' },
             orderBy: { createdAt: 'desc' }
@@ -75,6 +80,7 @@ router.get('/', async (req, res) => {
                 balance: openingBalance + totalOut - totalIn
             };
         });
+        fastCache_1.fastCache.set(cacheKey, vendorStats, 120);
         res.json(vendorStats);
     }
     catch (error) {
@@ -86,6 +92,10 @@ router.get('/', async (req, res) => {
 router.get('/:id/ledger', async (req, res) => {
     try {
         const { id } = req.params;
+        const cacheKey = `vendor_ledger_${id}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         const today = new Date();
         const currentYear = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
         const startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
@@ -119,6 +129,7 @@ router.get('/:id/ledger', async (req, res) => {
                 rawLog: log
             };
         });
+        fastCache_1.fastCache.set(cacheKey, ledgerEntries, 120);
         res.json(ledgerEntries);
     }
     catch (error) {
@@ -133,6 +144,7 @@ router.post('/', async (req, res) => {
         const vendor = await index_1.prisma.vendor.create({
             data: { name, contact, address, services }
         });
+        fastCache_1.fastCache.invalidate('vendors_stats');
         res.status(201).json(vendor);
     }
     catch (error) {
@@ -149,6 +161,8 @@ router.put('/:id', async (req, res) => {
             where: { id },
             data: { name, contact, address, services, status }
         });
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate(`vendor_ledger_${id}`);
         res.json(vendor);
     }
     catch (error) {
@@ -164,6 +178,8 @@ router.delete('/:id', async (req, res) => {
             where: { id },
             data: { status: 'inactive' }
         });
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate(`vendor_ledger_${id}`);
         res.json({ success: true });
     }
     catch (error) {

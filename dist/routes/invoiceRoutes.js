@@ -3,14 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get invoices
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('all_invoices');
+        if (cached)
+            return res.json(cached);
         const invoices = await index_1.prisma.invoice.findMany({
             orderBy: { createdAt: 'desc' },
             include: { project: { select: { projectId: true, name: true } } }
         });
+        fastCache_1.fastCache.set('all_invoices', invoices, 120);
         res.json(invoices);
     }
     catch (error) {
@@ -52,6 +57,8 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 status
             }
         });
+        fastCache_1.fastCache.invalidate('all_invoices');
+        fastCache_1.fastCache.invalidate('dashboard_summary');
         res.status(201).json(newInvoice);
     }
     catch (error) {

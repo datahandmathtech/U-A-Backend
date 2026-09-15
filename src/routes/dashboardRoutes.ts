@@ -138,7 +138,7 @@ router.get('/summary', authenticate, async (req, res) => {
       }
     };
 
-    fastCache.set(cacheKey, summaryData, 30);
+    fastCache.set(cacheKey, summaryData, 120);
     res.json(summaryData);
   } catch (error: any) {
     console.error('Dashboard summary error:', error);
