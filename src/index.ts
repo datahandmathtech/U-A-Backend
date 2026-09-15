@@ -73,7 +73,7 @@ import packingRoutes from './routes/packingRoutes';
 
 // Routes
 const mountRoutes = (prefix = '') => {
-  app.use(`${prefix}/auth`, authRoutes);
+  app.use([`${prefix}/auth`, `${prefix}/user-auth`, `${prefix}/session`, `${prefix}/account`], authRoutes);
   app.use(`${prefix}/leads`, leadRoutes);
   app.use(`${prefix}/projects`, projectRoutes);
   app.use(`${prefix}/designs`, designRoutes);

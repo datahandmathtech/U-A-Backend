@@ -69,7 +69,7 @@ const wasteRoutes_1 = __importDefault(require("./routes/wasteRoutes"));
 const packingRoutes_1 = __importDefault(require("./routes/packingRoutes"));
 // Routes
 const mountRoutes = (prefix = '') => {
-    app.use(`${prefix}/auth`, authRoutes_1.default);
+    app.use([`${prefix}/auth`, `${prefix}/user-auth`, `${prefix}/session`, `${prefix}/account`], authRoutes_1.default);
     app.use(`${prefix}/leads`, leadRoutes_1.default);
     app.use(`${prefix}/projects`, projectRoutes_1.default);
     app.use(`${prefix}/designs`, designRoutes_1.default);
