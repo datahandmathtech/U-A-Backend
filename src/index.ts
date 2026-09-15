@@ -14,7 +14,7 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-const DIRECT_REPLICA_SET_URI = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred&maxPoolSize=25&minPoolSize=2&connectTimeoutMS=10000&socketTimeoutMS=45000&serverSelectionTimeoutMS=8000';
+const DIRECT_REPLICA_SET_URI = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primary&maxPoolSize=25&minPoolSize=2&connectTimeoutMS=10000&socketTimeoutMS=45000&serverSelectionTimeoutMS=8000';
 
 // Use direct replica set URI to eliminate SRV DNS lookup hangs on cloud hostings like Hostinger
 let effectiveDbUrl = DIRECT_REPLICA_SET_URI;
