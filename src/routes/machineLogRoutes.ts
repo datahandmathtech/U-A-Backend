@@ -86,6 +86,7 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_machine_logs');
     fastCache.invalidate('live_feed');
     res.status(201).json(newLog);
   } catch (error) { console.error(error);
@@ -117,6 +118,7 @@ router.post('/clock-in', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_machine_logs');
     fastCache.invalidate('live_feed');
     res.status(201).json(newLog);
   } catch (error) { console.error(error);
@@ -217,6 +219,7 @@ router.post('/clock-out', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_machine_logs');
     fastCache.invalidate('live_feed');
     res.json(updatedLog);
   } catch (error) { console.error(error);
@@ -232,6 +235,7 @@ router.put('/approve/:id', authenticate, async (req, res) => {
       where: { id: req.params.id as string },
       data: { approvalStatus: 'approved', projectId, productId, productName }
     });
+    fastCache.invalidate('all_machine_logs');
     fastCache.invalidate('live_feed');
     res.json(updated);
   } catch (error) { console.error(error);

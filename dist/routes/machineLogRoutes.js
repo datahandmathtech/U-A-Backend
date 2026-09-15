@@ -84,6 +84,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 operatorId
             }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
         fastCache_1.fastCache.invalidate('live_feed');
         res.status(201).json(newLog);
     }
@@ -114,6 +115,7 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
                 approvalStatus: 'in_progress'
             }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
         fastCache_1.fastCache.invalidate('live_feed');
         res.status(201).json(newLog);
     }
@@ -208,6 +210,7 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
                 status: 'completed'
             }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
         fastCache_1.fastCache.invalidate('live_feed');
         res.json(updatedLog);
     }
@@ -224,6 +227,7 @@ router.put('/approve/:id', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: req.params.id },
             data: { approvalStatus: 'approved', projectId, productId, productName }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
         fastCache_1.fastCache.invalidate('live_feed');
         res.json(updated);
     }
