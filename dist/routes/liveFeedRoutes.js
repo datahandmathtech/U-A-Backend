@@ -3,35 +3,37 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const machineLogHelper_1 = require("../utils/machineLogHelper");
 const router = (0, express_1.Router)();
 // Get live factory feed (Machine Logs for Selected Date) - Optimized for high performance
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        // Run midnight auto-split on-demand to guarantee real-time carry forward
+        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const dateParam = req.query.date;
-        const queryDate = dateParam ? new Date(dateParam) : new Date();
-        const startOfDay = new Date(queryDate);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(queryDate);
-        endOfDay.setHours(23, 59, 59, 999);
-        const isToday = queryDate.toDateString() === new Date().toDateString();
-        let dateWhere;
-        if (isToday) {
-            // For today: logs active today, or completed today, or active within recent window
-            const recentWindow = new Date(Date.now() - 48 * 60 * 60 * 1000);
-            dateWhere = {
-                OR: [
-                    { startTime: { gte: startOfDay, lte: endOfDay } },
-                    { endTime: { gte: startOfDay, lte: endOfDay } },
-                    { status: 'active', startTime: { gte: recentWindow } }
-                ]
-            };
+        let startOfDay;
+        let endOfDay;
+        if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+            const parts = dateParam.split('-').map(Number);
+            const y = parts[0] || 2026;
+            const m = parts[1] || 1;
+            const d = parts[2] || 1;
+            startOfDay = new Date(y, m - 1, d, 0, 0, 0, 0);
+            endOfDay = new Date(y, m - 1, d, 23, 59, 59, 999);
         }
         else {
-            // For past date: logs that were started on that date
-            dateWhere = {
-                startTime: { gte: startOfDay, lte: endOfDay }
-            };
+            const now = new Date();
+            startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+            endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         }
+        const dateWhere = {
+            startTime: { lte: endOfDay },
+            OR: [
+                { endTime: { gte: startOfDay } },
+                { endTime: null },
+                { status: 'active' }
+            ]
+        };
         const liveFeedLogs = await index_1.prisma.machineLog.findMany({
             where: dateWhere,
             select: {
@@ -54,6 +56,8 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 endSoftwarePhotoUrl: true,
                 status: true,
                 approvalStatus: true,
+                isCarryForward: true,
+                parentLogId: true,
                 remarks: true,
                 createdAt: true,
                 machine: {

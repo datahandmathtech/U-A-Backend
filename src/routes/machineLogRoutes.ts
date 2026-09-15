@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { autoSplitActiveMachineLogs } from '../utils/machineLogHelper';
 
 const router = Router();
 
 // Get Machine Logs
 router.get('/', authenticate, async (req, res) => {
   try {
+    await autoSplitActiveMachineLogs();
     const logs = await prisma.machineLog.findMany({
       orderBy: { createdAt: 'desc' },
       include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
@@ -20,6 +22,7 @@ router.get('/', authenticate, async (req, res) => {
 // Live Feed Endpoint
 router.get('/live-feed', authenticate, async (req, res) => {
   try {
+    await autoSplitActiveMachineLogs();
     const activeLogs = await prisma.machineLog.findMany({
       where: { status: 'active' },
       orderBy: { startTime: 'desc' },
@@ -91,6 +94,7 @@ router.post('/clock-in', authenticate, async (req, res) => {
 // Get ALL Machine Logs for Today
 router.get('/daily-logs', authenticate, async (req, res) => {
   try {
+    await autoSplitActiveMachineLogs();
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -117,6 +121,7 @@ router.get('/daily-logs', authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authenticate, async (req, res) => {
   try {
+    await autoSplitActiveMachineLogs();
     const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
     
     let log = await prisma.machineLog.findFirst({

@@ -176,7 +176,7 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
         orderBy: { createdAt: 'desc' },
         include: {
           worker: { select: { name: true, staffId: true } },
-          project: { select: { name: true, projectId: true } }
+          project: { select: { name: true, projectId: true, clientName: true } }
         }
       }),
       prisma.productionLog.findMany({
@@ -221,7 +221,7 @@ router.get('/rejected-logs', authenticate, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: {
         worker: { select: { name: true, staffId: true } },
-        project: { select: { name: true, projectId: true } }
+        project: { select: { name: true, projectId: true, clientName: true } }
       }
     });
     res.json(rejectedLogs);

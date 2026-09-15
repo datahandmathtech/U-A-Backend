@@ -3,10 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const machineLogHelper_1 = require("../utils/machineLogHelper");
 const router = (0, express_1.Router)();
 // Get Machine Logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const logs = await index_1.prisma.machineLog.findMany({
             orderBy: { createdAt: 'desc' },
             include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
@@ -21,6 +23,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
 // Live Feed Endpoint
 router.get('/live-feed', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const activeLogs = await index_1.prisma.machineLog.findMany({
             where: { status: 'active' },
             orderBy: { startTime: 'desc' },
@@ -91,6 +94,7 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
 // Get ALL Machine Logs for Today
 router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
         const dailyLogs = await index_1.prisma.machineLog.findMany({
@@ -117,6 +121,7 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
         let log = await index_1.prisma.machineLog.findFirst({
             where: { id: logId, status: 'active' }

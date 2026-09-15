@@ -438,6 +438,8 @@ model MachineLog {
   endSoftwarePhotoUrl String?
   status              String    @default("active") // active, completed
   approvalStatus      String    @default("pending") // pending, approved, rejected
+  isCarryForward      Boolean?  @default(false)
+  parentLogId         String?   @db.ObjectId
   remarks             String?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt

@@ -6,8 +6,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.initCronJobs = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
 const index_1 = require("../index");
+const machineLogHelper_1 = require("./machineLogHelper");
 const initCronJobs = () => {
-    // Run on the 1st of every month at 00:01
+    // 1. Midnight auto-split for running machines (Carry Forward across 12:00 AM)
+    // Runs every 5 minutes and explicitly at midnight 00:00
+    node_cron_1.default.schedule('*/5 * * * *', async () => {
+        try {
+            await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
+        }
+        catch (err) {
+            console.error('[CRON] Error in autoSplitActiveMachineLogs:', err);
+        }
+    });
+    // 2. Run on the 1st of every month at 00:01
     // This will calculate the closing stock of the previous month and save it as the opening stock of the current month
     node_cron_1.default.schedule('1 0 1 * *', async () => {
         console.log('[CRON] Running End of Month Stock Snapshot...');
