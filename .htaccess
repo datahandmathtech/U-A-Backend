@@ -1,0 +1,12 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow all HTTP methods
+  <Limit GET POST PUT DELETE OPTIONS PATCH HEAD>
+    Allow from all
+  </Limit>
+
+  # Pass Authorization Header to Node.js
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
