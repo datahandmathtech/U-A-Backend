@@ -89,11 +89,40 @@ router.get('/', authenticate, async (req, res) => {
           }
         }
       },
-      orderBy: { startTime: 'desc' },
-      take: 100
+      orderBy: { startTime: 'desc' }
     });
 
-    res.json(liveFeedLogs);
+    // Batch lookup root parent logs to resolve true original First ON date & operator
+    const parentIds = Array.from(new Set(liveFeedLogs.map((l: any) => l.parentLogId).filter(Boolean)));
+    const rootParentsMap = new Map<string, any>();
+    
+    if (parentIds.length > 0) {
+      const parentLogs = await prisma.machineLog.findMany({
+        where: { id: { in: parentIds as string[] } },
+        select: {
+          id: true,
+          startTime: true,
+          parentLogId: true,
+          operator: { select: { id: true, name: true, staffId: true } }
+        }
+      });
+      parentLogs.forEach((p: any) => rootParentsMap.set(p.id, p));
+    }
+
+    const enrichedLogs = liveFeedLogs.map((log: any) => {
+      let rootParent = log.parentLogId ? rootParentsMap.get(log.parentLogId) : null;
+      // If rootParent itself had a parent, look up or fallback
+      const initialStartTime = rootParent?.startTime || log.startTime;
+      const initialOperator = rootParent?.operator || log.operator;
+
+      return {
+        ...log,
+        initialStartTime,
+        initialOperator
+      };
+    });
+
+    res.json(enrichedLogs);
   } catch (error) {
     console.error('Live Feed Error:', error);
     res.status(500).json({ message: 'Server error fetching live feed' });

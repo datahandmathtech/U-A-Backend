@@ -86,10 +86,35 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     }
                 }
             },
-            orderBy: { startTime: 'desc' },
-            take: 100
+            orderBy: { startTime: 'desc' }
         });
-        res.json(liveFeedLogs);
+        // Batch lookup root parent logs to resolve true original First ON date & operator
+        const parentIds = Array.from(new Set(liveFeedLogs.map((l) => l.parentLogId).filter(Boolean)));
+        const rootParentsMap = new Map();
+        if (parentIds.length > 0) {
+            const parentLogs = await index_1.prisma.machineLog.findMany({
+                where: { id: { in: parentIds } },
+                select: {
+                    id: true,
+                    startTime: true,
+                    parentLogId: true,
+                    operator: { select: { id: true, name: true, staffId: true } }
+                }
+            });
+            parentLogs.forEach((p) => rootParentsMap.set(p.id, p));
+        }
+        const enrichedLogs = liveFeedLogs.map((log) => {
+            let rootParent = log.parentLogId ? rootParentsMap.get(log.parentLogId) : null;
+            // If rootParent itself had a parent, look up or fallback
+            const initialStartTime = rootParent?.startTime || log.startTime;
+            const initialOperator = rootParent?.operator || log.operator;
+            return {
+                ...log,
+                initialStartTime,
+                initialOperator
+            };
+        });
+        res.json(enrichedLogs);
     }
     catch (error) {
         console.error('Live Feed Error:', error);
