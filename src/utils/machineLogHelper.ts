@@ -1,6 +1,11 @@
 import { prisma } from '../index';
 
+let isSplitting = false;
+
 export async function autoSplitActiveMachineLogs() {
+  if (isSplitting) return;
+  isSplitting = true;
+
   try {
     // Find all active logs
     const activeLogs = await prisma.machineLog.findMany({
@@ -46,6 +51,21 @@ export async function autoSplitActiveMachineLogs() {
           // 2. Start a new carry-forward log for the next day at 00:00:00.000
           const nextDayStart = new Date(endOfDay.getTime() + 1); // 1 ms after 23:59:59.999 is 00:00:00.000 of next day
           
+          // Deduplication: ensure an active log does not already exist for this machine on nextDayStart
+          const existingActive = await prisma.machineLog.findFirst({
+            where: {
+              machineId: log.machineId,
+              status: 'active',
+              startTime: nextDayStart
+            }
+          });
+
+          if (existingActive) {
+            currentLogId = existingActive.id;
+            currentLogStart = nextDayStart;
+            continue;
+          }
+
           const newLog = await prisma.machineLog.create({
             data: {
               machineId: log.machineId,
@@ -62,7 +82,7 @@ export async function autoSplitActiveMachineLogs() {
               approvalStatus: 'in_progress',
               isCarryForward: true,
               parentLogId: rootParentId,
-              remarks: log.remarks ? `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}` : `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}`
+              remarks: `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}`
             }
           });
           
@@ -76,5 +96,7 @@ export async function autoSplitActiveMachineLogs() {
     }
   } catch (error) {
     console.error("Error in autoSplitActiveMachineLogs:", error);
+  } finally {
+    isSplitting = false;
   }
 }

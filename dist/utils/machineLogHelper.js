@@ -2,7 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.autoSplitActiveMachineLogs = autoSplitActiveMachineLogs;
 const index_1 = require("../index");
+let isSplitting = false;
 async function autoSplitActiveMachineLogs() {
+    if (isSplitting)
+        return;
+    isSplitting = true;
     try {
         // Find all active logs
         const activeLogs = await index_1.prisma.machineLog.findMany({
@@ -40,6 +44,19 @@ async function autoSplitActiveMachineLogs() {
                     }
                     // 2. Start a new carry-forward log for the next day at 00:00:00.000
                     const nextDayStart = new Date(endOfDay.getTime() + 1); // 1 ms after 23:59:59.999 is 00:00:00.000 of next day
+                    // Deduplication: ensure an active log does not already exist for this machine on nextDayStart
+                    const existingActive = await index_1.prisma.machineLog.findFirst({
+                        where: {
+                            machineId: log.machineId,
+                            status: 'active',
+                            startTime: nextDayStart
+                        }
+                    });
+                    if (existingActive) {
+                        currentLogId = existingActive.id;
+                        currentLogStart = nextDayStart;
+                        continue;
+                    }
                     const newLog = await index_1.prisma.machineLog.create({
                         data: {
                             machineId: log.machineId,
@@ -56,7 +73,7 @@ async function autoSplitActiveMachineLogs() {
                             approvalStatus: 'in_progress',
                             isCarryForward: true,
                             parentLogId: rootParentId,
-                            remarks: log.remarks ? `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}` : `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}`
+                            remarks: `Carry Forward from ${currentLogStart.toLocaleDateString('en-GB')}`
                         }
                     });
                     // Update local variables for next day loop iteration if it spans multiple past days
@@ -71,6 +88,9 @@ async function autoSplitActiveMachineLogs() {
     }
     catch (error) {
         console.error("Error in autoSplitActiveMachineLogs:", error);
+    }
+    finally {
+        isSplitting = false;
     }
 }
 //# sourceMappingURL=machineLogHelper.js.map
