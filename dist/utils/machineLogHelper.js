@@ -13,19 +13,26 @@ async function autoSplitActiveMachineLogs() {
             where: { status: 'active' }
         });
         const now = new Date();
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5 hours 30 mins (Asia/Kolkata)
         for (const log of activeLogs) {
             let currentLogId = log.id;
             let currentLogStart = new Date(log.startTime);
             const rootParentId = log.parentLogId || log.id;
             let maxIterations = 35;
             while (maxIterations-- > 0) {
-                // Find the end of currentLogStart's day: 23:59:59.999
-                const endOfDay = new Date(currentLogStart);
-                endOfDay.setHours(23, 59, 59, 999);
+                // Calculate IST midnight bounds
+                const istStart = new Date(currentLogStart.getTime() + IST_OFFSET_MS);
+                const year = istStart.getUTCFullYear();
+                const month = istStart.getUTCMonth();
+                const day = istStart.getUTCDate();
+                // 23:59:59.999 IST converted back to UTC
+                const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999) - IST_OFFSET_MS);
+                // 00:00:00.000 IST next day converted back to UTC
+                const nextDayStart = new Date(Date.UTC(year, month, day + 1, 0, 0, 0, 0) - IST_OFFSET_MS);
                 // If endOfDay is strictly in the past compared to current time 'now'
                 if (endOfDay.getTime() < now.getTime()) {
                     // This log crosses midnight!
-                    // 1. Close the current log at 23:59:59.999 of its day
+                    // 1. Close the current log at 23:59:59.999 of its day (IST)
                     const runHours = Math.max(0, (endOfDay.getTime() - currentLogStart.getTime()) / (1000 * 60 * 60));
                     await index_1.prisma.machineLog.update({
                         where: { id: currentLogId },
@@ -42,8 +49,6 @@ async function autoSplitActiveMachineLogs() {
                             data: { totalRunHours: { increment: runHours } }
                         });
                     }
-                    // 2. Start a new carry-forward log for the next day at 00:00:00.000
-                    const nextDayStart = new Date(endOfDay.getTime() + 1); // 1 ms after 23:59:59.999 is 00:00:00.000 of next day
                     // Deduplication: ensure an active log does not already exist for this machine on nextDayStart
                     const existingActive = await index_1.prisma.machineLog.findFirst({
                         where: {
