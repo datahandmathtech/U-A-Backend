@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
@@ -8,6 +9,9 @@ const router = Router();
 router.get('/', authenticate, async (req, res) => {
   try {
     const { fyYear } = req.query;
+    const cacheKey = `all_inventory_${fyYear || 'current'}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
     
     // Determine Financial Year start and end dates
     const now = new Date();
@@ -78,6 +82,7 @@ router.get('/', authenticate, async (req, res) => {
       };
     });
 
+    fastCache.set(cacheKey, enrichedInventory, 8);
     res.json(enrichedInventory);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching inventory' });
@@ -119,6 +124,7 @@ router.post('/', authenticate, async (req, res) => {
       });
     }
     
+    fastCache.invalidate('all_inventory');
     res.status(201).json(newItem);
   } catch (error) {
     console.error('Error creating inventory item:', error);

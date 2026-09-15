@@ -3,13 +3,18 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get machines
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('all_machines');
+        if (cached)
+            return res.json(cached);
         const machines = await index_1.prisma.machine.findMany({
             orderBy: { createdAt: 'desc' }
         });
+        fastCache_1.fastCache.set('all_machines', machines, 15);
         res.json(machines);
     }
     catch (error) {
@@ -29,6 +34,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 status: 'active'
             }
         });
+        fastCache_1.fastCache.invalidate('all_machines');
         res.status(201).json(newMachine);
     }
     catch (error) {
@@ -49,6 +55,7 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 totalRunHours: totalRunHours !== undefined ? Number(totalRunHours) : undefined
             }
         });
+        fastCache_1.fastCache.invalidate('all_machines');
         res.json(updated);
     }
     catch (error) {
@@ -74,6 +81,7 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
             index_1.prisma.attendance.updateMany({ where: { machineId }, data: { machineId: null } })
         ]);
         await index_1.prisma.machine.delete({ where: { id: machineId } });
+        fastCache_1.fastCache.invalidate('all_machines');
         res.json({ message: 'Machine deleted successfully' });
     }
     catch (error) {

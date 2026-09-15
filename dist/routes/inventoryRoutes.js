@@ -3,11 +3,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get inventory items with FY stats
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { fyYear } = req.query;
+        const cacheKey = `all_inventory_${fyYear || 'current'}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         // Determine Financial Year start and end dates
         const now = new Date();
         let currentFyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
@@ -69,6 +74,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 closingStock: openingStock + inQty - outQty
             };
         });
+        fastCache_1.fastCache.set(cacheKey, enrichedInventory, 8);
         res.json(enrichedInventory);
     }
     catch (error) {
@@ -107,6 +113,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 }
             });
         }
+        fastCache_1.fastCache.invalidate('all_inventory');
         res.status(201).json(newItem);
     }
     catch (error) {

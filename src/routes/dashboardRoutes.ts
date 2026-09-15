@@ -1,12 +1,16 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
 router.get('/summary', authenticate, async (req, res) => {
   try {
     const { fy, month } = req.query;
+    const cacheKey = `dashboard_summary_${fy || 'all'}_${month || 'all'}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
     
     let dateFilter: any = {};
     if (fy && typeof fy === 'string') {
@@ -117,21 +121,32 @@ router.get('/summary', authenticate, async (req, res) => {
     const electricityCost = filteredElec.reduce((acc, curr) => acc + (curr.totalBill || 0), 0);
     const netProfit = totalRevenue - (laborCost + factoryExpenses + electricityCost);
 
-    res.json({
-      totalLeads,
-      activeProjects,
-      pendingQuotations,
-      readyForDispatch,
-      totalRevenue,
-      advancePaidTotal,
-      pendingInvoicesTotal: advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal,
-      profitability: {
+    const totalBilled = totalRevenue;
+    const totalAdvance = advancePaidTotal;
+    const totalBalance = advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal;
+    const collectionPercentage = totalBilled > 0 ? (totalAdvance / totalBilled) * 100 : 0;
+
+    const summaryData = {
+      summary: {
+        totalLeads,
+        activeProjects,
+        pendingQuotations,
+        readyForDispatch,
+        financials: {
+          totalBilled,
+          advancePaid: totalAdvance,
+          balanceAmount: totalBalance,
+          collectionPercentage: Math.min(100, collectionPercentage)
+        },
         laborCost,
         factoryExpenses,
         electricityCost,
         netProfit
       }
-    });
+    };
+
+    fastCache.set(cacheKey, summaryData, 8);
+    res.json(summaryData);
   } catch (error: any) {
     console.error('Dashboard summary error:', error);
     res.status(500).json({ message: 'Server error fetching dashboard summary', error: error.message });

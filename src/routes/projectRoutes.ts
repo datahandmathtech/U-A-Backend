@@ -1,12 +1,16 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
 // Get all projects
 router.get('/', authenticate, async (req, res) => {
   try {
+    const cached = fastCache.get('all_projects');
+    if (cached) return res.json(cached);
+
     const projects = await prisma.project.findMany({
       orderBy: { createdAt: 'desc' },
       include: { 
@@ -40,6 +44,7 @@ router.get('/', authenticate, async (req, res) => {
       };
     });
 
+    fastCache.set('all_projects', enrichedProjects, 8);
     res.json(enrichedProjects);
   } catch (error) {
     console.error('Projects fetch error:', error);
@@ -132,6 +137,8 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('dashboard_summary');
     res.status(201).json(newProject);
   } catch (error) {
     console.error('Error creating project:', error);
@@ -263,6 +270,8 @@ router.patch('/:id', authenticate, async (req, res) => {
       }
     }
     
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('dashboard_summary');
     res.json(updated);
   } catch (error: any) {
     console.error("Error updating project:", error);

@@ -3,10 +3,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get all projects
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('all_projects');
+        if (cached)
+            return res.json(cached);
         const projects = await index_1.prisma.project.findMany({
             orderBy: { createdAt: 'desc' },
             include: {
@@ -37,6 +41,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 clientHandle: projectData.clientHandle || projectData.assignedTo?.name
             };
         });
+        fastCache_1.fastCache.set('all_projects', enrichedProjects, 8);
         res.json(enrichedProjects);
     }
     catch (error) {
@@ -124,6 +129,8 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 clientHandle
             }
         });
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('dashboard_summary');
         res.status(201).json(newProject);
     }
     catch (error) {
@@ -246,6 +253,8 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 }
             }
         }
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('dashboard_summary');
         res.json(updated);
     }
     catch (error) {

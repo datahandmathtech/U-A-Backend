@@ -3,12 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
-const machineLogHelper_1 = require("../utils/machineLogHelper");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get Machine Logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const logs = await index_1.prisma.machineLog.findMany({
             orderBy: { createdAt: 'desc' },
             include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
@@ -23,7 +22,6 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
 // Live Feed Endpoint
 router.get('/live-feed', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const activeLogs = await index_1.prisma.machineLog.findMany({
             where: { status: 'active' },
             orderBy: { startTime: 'desc' },
@@ -55,6 +53,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 operatorId
             }
         });
+        fastCache_1.fastCache.invalidate('live_feed');
         res.status(201).json(newLog);
     }
     catch (error) {
@@ -84,6 +83,7 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
                 approvalStatus: 'in_progress'
             }
         });
+        fastCache_1.fastCache.invalidate('live_feed');
         res.status(201).json(newLog);
     }
     catch (error) {
@@ -94,7 +94,6 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
 // Get ALL Machine Logs for Today
 router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
         const dailyLogs = await index_1.prisma.machineLog.findMany({
@@ -121,7 +120,6 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
         const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
         let log = await index_1.prisma.machineLog.findFirst({
             where: { id: logId, status: 'active' }
@@ -179,6 +177,7 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
                 status: 'completed'
             }
         });
+        fastCache_1.fastCache.invalidate('live_feed');
         res.json(updatedLog);
     }
     catch (error) {
@@ -194,6 +193,7 @@ router.put('/approve/:id', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: req.params.id },
             data: { approvalStatus: 'approved', projectId, productId, productName }
         });
+        fastCache_1.fastCache.invalidate('live_feed');
         res.json(updated);
     }
     catch (error) {

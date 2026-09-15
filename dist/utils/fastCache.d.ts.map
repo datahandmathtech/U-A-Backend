@@ -1,0 +1,1 @@
+{"version":3,"file":"fastCache.d.ts","sourceRoot":"","sources":["../../src/utils/fastCache.ts"],"names":[],"mappings":"AAQA,eAAO,MAAM,SAAS;aACX,MAAM,GAAG,GAAG,GAAG,IAAI;aAUnB,MAAM,QAAQ,GAAG,eAAc,MAAM,GAAO,IAAI;iCAO5B,MAAM,GAAG,IAAI;gBAY9B,IAAI;CAGjB,CAAC"}

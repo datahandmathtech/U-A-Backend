@@ -3,14 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
-const machineLogHelper_1 = require("../utils/machineLogHelper");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
-// Get live factory feed (Machine Logs for Selected Date) - Optimized for high performance
+// Get live factory feed (Machine Logs for Selected Date) - Optimized with fast in-memory cache
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        // Run midnight auto-split asynchronously in background so GET request responds instantly
-        (0, machineLogHelper_1.autoSplitActiveMachineLogs)().catch(err => console.error('[LiveFeed] Background autoSplit error:', err));
-        const dateParam = req.query.date;
+        const dateParam = req.query.date || '';
+        const cacheKey = `live_feed_${dateParam}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached) {
+            return res.json(cached);
+        }
         let startOfDay;
         let endOfDay;
         if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
@@ -114,6 +117,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 initialOperator
             };
         });
+        fastCache_1.fastCache.set(cacheKey, enrichedLogs, 6);
         res.json(enrichedLogs);
     }
     catch (error) {

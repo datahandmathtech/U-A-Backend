@@ -3,10 +3,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { fy, month } = req.query;
+        const cacheKey = `dashboard_summary_${fy || 'all'}_${month || 'all'}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         let dateFilter = {};
         if (fy && typeof fy === 'string') {
             const startYear = parseInt(fy.split('-')[0]);
@@ -104,21 +109,30 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         });
         const electricityCost = filteredElec.reduce((acc, curr) => acc + (curr.totalBill || 0), 0);
         const netProfit = totalRevenue - (laborCost + factoryExpenses + electricityCost);
-        res.json({
-            totalLeads,
-            activeProjects,
-            pendingQuotations,
-            readyForDispatch,
-            totalRevenue,
-            advancePaidTotal,
-            pendingInvoicesTotal: advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal,
-            profitability: {
+        const totalBilled = totalRevenue;
+        const totalAdvance = advancePaidTotal;
+        const totalBalance = advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal;
+        const collectionPercentage = totalBilled > 0 ? (totalAdvance / totalBilled) * 100 : 0;
+        const summaryData = {
+            summary: {
+                totalLeads,
+                activeProjects,
+                pendingQuotations,
+                readyForDispatch,
+                financials: {
+                    totalBilled,
+                    advancePaid: totalAdvance,
+                    balanceAmount: totalBalance,
+                    collectionPercentage: Math.min(100, collectionPercentage)
+                },
                 laborCost,
                 factoryExpenses,
                 electricityCost,
                 netProfit
             }
-        });
+        };
+        fastCache_1.fastCache.set(cacheKey, summaryData, 8);
+        res.json(summaryData);
     }
     catch (error) {
         console.error('Dashboard summary error:', error);

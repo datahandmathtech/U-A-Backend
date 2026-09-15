@@ -1,17 +1,20 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
-import { autoSplitActiveMachineLogs } from '../utils/machineLogHelper';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
-// Get live factory feed (Machine Logs for Selected Date) - Optimized for high performance
+// Get live factory feed (Machine Logs for Selected Date) - Optimized with fast in-memory cache
 router.get('/', authenticate, async (req, res) => {
   try {
-    // Run midnight auto-split asynchronously in background so GET request responds instantly
-    autoSplitActiveMachineLogs().catch(err => console.error('[LiveFeed] Background autoSplit error:', err));
+    const dateParam = (req.query.date as string) || '';
+    const cacheKey = `live_feed_${dateParam}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
-    const dateParam = req.query.date as string;
     let startOfDay: Date;
     let endOfDay: Date;
 
@@ -122,6 +125,7 @@ router.get('/', authenticate, async (req, res) => {
       };
     });
 
+    fastCache.set(cacheKey, enrichedLogs, 6);
     res.json(enrichedLogs);
   } catch (error) {
     console.error('Live Feed Error:', error);

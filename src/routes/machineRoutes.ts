@@ -1,15 +1,20 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
 // Get machines
 router.get('/', authenticate, async (req, res) => {
   try {
+    const cached = fastCache.get('all_machines');
+    if (cached) return res.json(cached);
+
     const machines = await prisma.machine.findMany({
       orderBy: { createdAt: 'desc' }
     });
+    fastCache.set('all_machines', machines, 15);
     res.json(machines);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching machines' });
@@ -31,6 +36,7 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('all_machines');
     res.status(201).json(newMachine);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating machine' });
@@ -52,6 +58,7 @@ router.put('/:id', authenticate, async (req, res) => {
         totalRunHours: totalRunHours !== undefined ? Number(totalRunHours) : undefined
       }
     });
+    fastCache.invalidate('all_machines');
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Server error updating machine' });
@@ -81,6 +88,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     ]);
 
     await prisma.machine.delete({ where: { id: machineId } });
+    fastCache.invalidate('all_machines');
     res.json({ message: 'Machine deleted successfully' });
   } catch (error: any) {
     console.error('Server error deleting machine:', error);
