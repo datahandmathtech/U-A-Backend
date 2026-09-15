@@ -13,7 +13,8 @@ async function autoSplitActiveMachineLogs() {
             let currentLogId = log.id;
             let currentLogStart = new Date(log.startTime);
             const rootParentId = log.parentLogId || log.id;
-            while (true) {
+            let maxIterations = 35;
+            while (maxIterations-- > 0) {
                 // Find the end of currentLogStart's day: 23:59:59.999
                 const endOfDay = new Date(currentLogStart);
                 endOfDay.setHours(23, 59, 59, 999);
