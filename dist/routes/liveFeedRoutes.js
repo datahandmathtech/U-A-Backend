@@ -8,8 +8,8 @@ const router = (0, express_1.Router)();
 // Get live factory feed (Machine Logs for Selected Date) - Optimized for high performance
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        // Run midnight auto-split on-demand to guarantee real-time carry forward
-        await (0, machineLogHelper_1.autoSplitActiveMachineLogs)();
+        // Run midnight auto-split asynchronously in background so GET request responds instantly
+        (0, machineLogHelper_1.autoSplitActiveMachineLogs)().catch(err => console.error('[LiveFeed] Background autoSplit error:', err));
         const dateParam = req.query.date;
         let startOfDay;
         let endOfDay;
