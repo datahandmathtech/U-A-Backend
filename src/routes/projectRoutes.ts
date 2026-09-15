@@ -44,7 +44,7 @@ router.get('/', authenticate, async (req, res) => {
       };
     });
 
-    fastCache.set('all_projects', enrichedProjects, 8);
+    fastCache.set('all_projects', enrichedProjects, 120);
     res.json(enrichedProjects);
   } catch (error) {
     console.error('Projects fetch error:', error);

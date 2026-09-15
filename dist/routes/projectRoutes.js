@@ -41,7 +41,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 clientHandle: projectData.clientHandle || projectData.assignedTo?.name
             };
         });
-        fastCache_1.fastCache.set('all_projects', enrichedProjects, 8);
+        fastCache_1.fastCache.set('all_projects', enrichedProjects, 120);
         res.json(enrichedProjects);
     }
     catch (error) {

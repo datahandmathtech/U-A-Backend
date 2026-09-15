@@ -43,7 +43,7 @@ router.get('/', authenticate, async (req, res) => {
       }
     });
 
-    fastCache.set('all_machine_logs', logs, 10);
+    fastCache.set('all_machine_logs', logs, 120);
     res.json(logs);
   } catch (error) {
     console.error(error);

@@ -42,7 +42,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 operator: { select: { id: true, name: true, staffId: true } }
             }
         });
-        fastCache_1.fastCache.set('all_machine_logs', logs, 10);
+        fastCache_1.fastCache.set('all_machine_logs', logs, 120);
         res.json(logs);
     }
     catch (error) {

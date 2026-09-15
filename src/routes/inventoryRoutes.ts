@@ -82,7 +82,7 @@ router.get('/', authenticate, async (req, res) => {
       };
     });
 
-    fastCache.set(cacheKey, enrichedInventory, 8);
+    fastCache.set(cacheKey, enrichedInventory, 120);
     res.json(enrichedInventory);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching inventory' });

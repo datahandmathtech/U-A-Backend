@@ -74,7 +74,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 closingStock: openingStock + inQty - outQty
             };
         });
-        fastCache_1.fastCache.set(cacheKey, enrichedInventory, 8);
+        fastCache_1.fastCache.set(cacheKey, enrichedInventory, 120);
         res.json(enrichedInventory);
     }
     catch (error) {

@@ -5,12 +5,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const index_1 = require("../index");
+const fastCache_1 = require("../utils/fastCache");
 const router = express_1.default.Router();
 router.get('/', async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('all_units');
+        if (cached)
+            return res.json(cached);
         const units = await index_1.prisma.unitCategory.findMany({
             orderBy: { name: 'asc' }
         });
+        fastCache_1.fastCache.set('all_units', units, 300);
         res.json(units);
     }
     catch (error) {
@@ -30,6 +35,7 @@ router.post('/', async (req, res) => {
         const unit = await index_1.prisma.unitCategory.create({
             data: { name }
         });
+        fastCache_1.fastCache.invalidate('all_units');
         res.status(201).json(unit);
     }
     catch (error) {
@@ -42,6 +48,7 @@ router.delete('/:id', async (req, res) => {
         await index_1.prisma.unitCategory.delete({
             where: { id: String(id) }
         });
+        fastCache_1.fastCache.invalidate('all_units');
         res.json({ message: 'Unit deleted' });
     }
     catch (error) {
