@@ -125,7 +125,7 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 netProfit
             }
         };
-        fastCache_1.fastCache.set(cacheKey, summaryData, 8);
+        fastCache_1.fastCache.set(cacheKey, summaryData, 30);
         res.json(summaryData);
     }
     catch (error) {
