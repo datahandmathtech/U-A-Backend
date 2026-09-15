@@ -111,7 +111,7 @@ router.post('/register', async (req, res) => {
 });
 
 // Login
-router.post('/login', async (req, res) => {
+router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res) => {
   try {
     const { email: emailOrStaffId, password } = req.body;
     
