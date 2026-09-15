@@ -121,23 +121,16 @@ router.get('/summary', authenticate, async (req, res) => {
     const electricityCost = filteredElec.reduce((acc, curr) => acc + (curr.totalBill || 0), 0);
     const netProfit = totalRevenue - (laborCost + factoryExpenses + electricityCost);
 
-    const totalBilled = totalRevenue;
-    const totalAdvance = advancePaidTotal;
-    const totalBalance = advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal;
-    const collectionPercentage = totalBilled > 0 ? (totalAdvance / totalBilled) * 100 : 0;
-
     const summaryData = {
-      summary: {
-        totalLeads,
-        activeProjects,
-        pendingQuotations,
-        readyForDispatch,
-        financials: {
-          totalBilled,
-          advancePaid: totalAdvance,
-          balanceAmount: totalBalance,
-          collectionPercentage: Math.min(100, collectionPercentage)
-        },
+      totalLeads,
+      activeProjects,
+      pendingQuotations,
+      readyForDispatch,
+      totalRevenue,
+      advancePaidTotal,
+      pendingInvoicesTotal: advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal,
+      profitability: {
+        totalRevenue,
         laborCost,
         factoryExpenses,
         electricityCost,
