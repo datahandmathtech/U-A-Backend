@@ -8,10 +8,41 @@ const router = (0, express_1.Router)();
 // Get Machine Logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('all_machine_logs');
+        if (cached)
+            return res.json(cached);
         const logs = await index_1.prisma.machineLog.findMany({
             orderBy: { createdAt: 'desc' },
-            include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
+            select: {
+                id: true,
+                machineId: true,
+                projectId: true,
+                productId: true,
+                productName: true,
+                startTime: true,
+                endTime: true,
+                estimatedHours: true,
+                downtime: true,
+                quantityProduced: true,
+                operatorId: true,
+                machinePhotoUrl: true,
+                unitPhotoUrl: true,
+                softwarePhotoUrl: true,
+                endMachinePhotoUrl: true,
+                endUnitPhotoUrl: true,
+                endSoftwarePhotoUrl: true,
+                status: true,
+                approvalStatus: true,
+                isCarryForward: true,
+                parentLogId: true,
+                remarks: true,
+                createdAt: true,
+                machine: { select: { id: true, name: true, type: true } },
+                project: { select: { id: true, name: true, projectId: true, clientName: true } },
+                operator: { select: { id: true, name: true, staffId: true } }
+            }
         });
+        fastCache_1.fastCache.set('all_machine_logs', logs, 10);
         res.json(logs);
     }
     catch (error) {
@@ -208,6 +239,8 @@ router.put('/reject/:id', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: req.params.id },
             data: { approvalStatus: 'rejected', status: 'completed', endTime: new Date() }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
+        fastCache_1.fastCache.invalidate('live_feed');
         res.json(updated);
     }
     catch (error) {
@@ -229,6 +262,8 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 productName: productName ? String(productName) : undefined
             }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
+        fastCache_1.fastCache.invalidate('live_feed');
         res.json(updated);
     }
     catch (error) {
@@ -242,6 +277,8 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         await index_1.prisma.machineLog.delete({
             where: { id: req.params.id }
         });
+        fastCache_1.fastCache.invalidate('all_machine_logs');
+        fastCache_1.fastCache.invalidate('live_feed');
         res.json({ message: 'Machine log deleted successfully' });
     }
     catch (error) {

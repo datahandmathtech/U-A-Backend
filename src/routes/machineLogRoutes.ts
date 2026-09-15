@@ -8,12 +8,45 @@ const router = Router();
 // Get Machine Logs
 router.get('/', authenticate, async (req, res) => {
   try {
+    const cached = fastCache.get('all_machine_logs');
+    if (cached) return res.json(cached);
+
     const logs = await prisma.machineLog.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { machine: { select: { name: true } }, project: { select: { name: true, projectId: true, clientName: true } }, operator: { select: { name: true, staffId: true } } }
+      select: {
+        id: true,
+        machineId: true,
+        projectId: true,
+        productId: true,
+        productName: true,
+        startTime: true,
+        endTime: true,
+        estimatedHours: true,
+        downtime: true,
+        quantityProduced: true,
+        operatorId: true,
+        machinePhotoUrl: true,
+        unitPhotoUrl: true,
+        softwarePhotoUrl: true,
+        endMachinePhotoUrl: true,
+        endUnitPhotoUrl: true,
+        endSoftwarePhotoUrl: true,
+        status: true,
+        approvalStatus: true,
+        isCarryForward: true,
+        parentLogId: true,
+        remarks: true,
+        createdAt: true,
+        machine: { select: { id: true, name: true, type: true } },
+        project: { select: { id: true, name: true, projectId: true, clientName: true } },
+        operator: { select: { id: true, name: true, staffId: true } }
+      }
     });
+
+    fastCache.set('all_machine_logs', logs, 10);
     res.json(logs);
-  } catch (error) { console.error(error);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ message: 'Server error fetching machine logs' });
   }
 });
@@ -213,6 +246,8 @@ router.put('/reject/:id', authenticate, async (req, res) => {
       where: { id: req.params.id as string },
       data: { approvalStatus: 'rejected', status: 'completed', endTime: new Date() }
     });
+    fastCache.invalidate('all_machine_logs');
+    fastCache.invalidate('live_feed');
     res.json(updated);
   } catch (error) { console.error(error);
     res.status(500).json({ message: 'Server error rejecting log' });
@@ -233,6 +268,8 @@ router.put('/:id', authenticate, async (req, res) => {
         productName: productName ? String(productName) : undefined
       }
     });
+    fastCache.invalidate('all_machine_logs');
+    fastCache.invalidate('live_feed');
     res.json(updated);
   } catch (error) { console.error(error);
     res.status(500).json({ message: 'Server error editing log' });
@@ -245,6 +282,8 @@ router.delete('/:id', authenticate, async (req, res) => {
     await prisma.machineLog.delete({
       where: { id: req.params.id as string }
     });
+    fastCache.invalidate('all_machine_logs');
+    fastCache.invalidate('live_feed');
     res.json({ message: 'Machine log deleted successfully' });
   } catch (error) { console.error(error);
     res.status(500).json({ message: 'Server error deleting log' });
