@@ -301,9 +301,25 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
                             }
                         });
                     }
-                    const usedSizeStr = (length && width)
-                        ? `${length}${unit === 'feet' ? 'ft' : 'L'} x ${width}${unit === 'feet' ? 'ft' : 'W'}${thickness ? ` | ${thickness}MM` : ''}`
-                        : null;
+                    let usedSizeStr = null;
+                    if (length && width) {
+                        const l = Number(length) || 0;
+                        const w = Number(width) || 0;
+                        const t = thickness ? ` | ${thickness}MM` : '';
+                        if (unit === 'feet') {
+                            usedSizeStr = `${l}ft x ${w}ft${t}`;
+                        }
+                        else if (unit === 'mm') {
+                            const lFt = (l / 304.8).toFixed(2);
+                            const wFt = (w / 304.8).toFixed(2);
+                            usedSizeStr = `${l}mm x ${w}mm (${lFt}ft x ${wFt}ft)${t}`;
+                        }
+                        else {
+                            const lFt = (l / 12).toFixed(2);
+                            const wFt = (w / 12).toFixed(2);
+                            usedSizeStr = `${l}" x ${w}" (${lFt}ft x ${wFt}ft)${t}`;
+                        }
+                    }
                     await index_1.prisma.piece.update({
                         where: { id: pieceId },
                         data: {
@@ -325,7 +341,22 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
         let cleanProjName = (projectName || '').replace(/\s*\(\d+(?:\.\d+)?\s*L?\s*[xX]\s*\d+(?:\.\d+)?\s*W?[^)]*\)/gi, '').trim();
         let outRemarks = cleanProjName ? `${cleanProjName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
         if (length && width) {
-            outRemarks += ` (${length}${unit === 'feet' ? 'ft' : 'L'} x ${width}${unit === 'feet' ? 'ft' : 'W'} | ${used.toFixed(2)} Sq.Ft)`;
+            const l = Number(length) || 0;
+            const w = Number(width) || 0;
+            const t = thickness ? ` | ${thickness}MM` : '';
+            if (unit === 'feet') {
+                outRemarks += ` (${l}ft x ${w}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
+            }
+            else if (unit === 'mm') {
+                const lFt = (l / 304.8).toFixed(2);
+                const wFt = (w / 304.8).toFixed(2);
+                outRemarks += ` (${l}mm x ${w}mm | ${lFt}ft x ${wFt}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
+            }
+            else {
+                const lFt = (l / 12).toFixed(2);
+                const wFt = (w / 12).toFixed(2);
+                outRemarks += ` (${l}" x ${w}" | ${lFt}ft x ${wFt}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
+            }
         }
         // Create OUT log for Used
         if (used > 0) {
