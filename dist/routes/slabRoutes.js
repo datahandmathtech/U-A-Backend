@@ -8,6 +8,10 @@ const router = (0, express_1.Router)();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cacheKey = 'project_hierarchy_v2';
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         const [projects, outLogs, productionLogs, pieceLogs] = await Promise.all([
             index_1.prisma.project.findMany({
                 select: {
@@ -62,16 +66,31 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
             })
         ]);
         const activePieceRemarks = outLogs.map(l => l.remarks || '').join(' ');
+        const prodLogSlabIds = new Set();
+        const prodLogPieceIds = new Set();
+        const prodLogProductNames = new Set();
+        for (const pl of productionLogs) {
+            if (pl.slabId)
+                prodLogSlabIds.add(pl.slabId);
+            if (Array.isArray(pl.pieceIds)) {
+                for (const pid of pl.pieceIds)
+                    prodLogPieceIds.add(pid);
+            }
+            if (pl.productName) {
+                prodLogProductNames.add(pl.productName.trim().toLowerCase());
+            }
+        }
+        const pieceLogIds = new Set(pieceLogs.map(pl => pl.pieceId));
         const cleanProjects = projects.map(proj => {
             const slabsWithProduction = proj.slabs.map(slab => {
                 const piecesWithProduction = slab.pieces.map(piece => {
                     const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
                     const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
-                    const hasPLog = productionLogs.some(pl => pl.slabId === slab.id ||
-                        pl.pieceIds?.includes(piece.id) ||
-                        (pl.productName && piece.productName && pl.productName.trim().toLowerCase() === piece.productName.trim().toLowerCase()));
-                    const hasPieceLog = pieceLogs.some(pl => pl.pieceId === piece.id);
-                    const hasProduction = hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active';
+                    const hasPLog = prodLogSlabIds.has(slab.id) ||
+                        prodLogPieceIds.has(piece.id) ||
+                        Boolean(piece.productName && prodLogProductNames.has(piece.productName.trim().toLowerCase()));
+                    const hasPieceLog = pieceLogIds.has(piece.id);
+                    const hasProduction = Boolean(hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active');
                     return {
                         ...piece,
                         hasProduction,
@@ -79,9 +98,9 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                         vendorName: isActuallyLogged ? piece.vendorName : null
                     };
                 });
-                const slabHasPLog = productionLogs.some(pl => pl.slabId === slab.id || (pl.productName && pl.productName.trim().toLowerCase().startsWith(slab.name.trim().toLowerCase())));
+                const slabHasPLog = prodLogSlabIds.has(slab.id) || Array.from(prodLogProductNames).some(pName => pName.startsWith(slab.name.trim().toLowerCase()));
                 const slabHasPiecesInProduction = piecesWithProduction.some(p => p.hasProduction);
-                const hasProduction = slabHasPLog || slabHasPiecesInProduction;
+                const hasProduction = Boolean(slabHasPLog || slabHasPiecesInProduction);
                 return {
                     ...slab,
                     hasProduction,
@@ -93,6 +112,7 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                 slabs: slabsWithProduction
             };
         });
+        fastCache_1.fastCache.set(cacheKey, cleanProjects, 30);
         res.json(cleanProjects);
     }
     catch (error) {
@@ -102,6 +122,10 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
 // Get all distinct slab names and project/production names
 router.get('/all-names', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cacheKey = 'all_names_v2';
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         const [slabs, projects, pieces] = await Promise.all([
             index_1.prisma.slab.findMany({
                 select: {
@@ -149,7 +173,9 @@ router.get('/all-names', authMiddleware_1.authenticate, async (req, res) => {
                 }
             }
         });
-        res.json(Array.from(namesSet).filter(Boolean));
+        const result = Array.from(namesSet).filter(Boolean);
+        fastCache_1.fastCache.set(cacheKey, result, 60);
+        res.json(result);
     }
     catch (error) {
         res.status(500).json({ message: 'Error fetching names', error });

@@ -412,6 +412,7 @@ router.post('/deduct', authenticate, async (req, res) => {
       });
     }
 
+    fastCache.clearAll();
     res.json({ message: 'Stock deducted successfully' });
   } catch (error) {
     console.error(error);
@@ -466,6 +467,7 @@ router.put('/logs/:id', authenticate, async (req, res) => {
       data: updateData
     });
     
+    fastCache.clearAll();
     res.json(updated);
   } catch(error) {
     console.error(error);
@@ -520,12 +522,12 @@ router.delete('/logs/:id', authenticate, async (req, res) => {
     }
     
     await prisma.inventoryLog.delete({ where: { id } });
+    fastCache.clearAll();
     res.json({ message: 'Log deleted successfully' });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Error deleting log' });
+    res.status(500).json({ message: 'Server error deleting log' });
   }
 });
 
 export default router;
-

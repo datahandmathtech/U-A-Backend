@@ -9,6 +9,10 @@ const router = Router();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authenticate, async (req, res) => {
   try {
+    const cacheKey = 'project_hierarchy_v2';
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const [projects, outLogs, productionLogs, pieceLogs] = await Promise.all([
       prisma.project.findMany({
         select: {
@@ -65,19 +69,34 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
 
     const activePieceRemarks = outLogs.map(l => l.remarks || '').join(' ');
 
+    const prodLogSlabIds = new Set<string>();
+    const prodLogPieceIds = new Set<string>();
+    const prodLogProductNames = new Set<string>();
+
+    for (const pl of productionLogs) {
+      if (pl.slabId) prodLogSlabIds.add(pl.slabId);
+      if (Array.isArray(pl.pieceIds)) {
+        for (const pid of pl.pieceIds) prodLogPieceIds.add(pid);
+      }
+      if (pl.productName) {
+        prodLogProductNames.add(pl.productName.trim().toLowerCase());
+      }
+    }
+
+    const pieceLogIds = new Set(pieceLogs.map(pl => pl.pieceId));
+
     const cleanProjects = projects.map(proj => {
       const slabsWithProduction = proj.slabs.map(slab => {
         const piecesWithProduction = slab.pieces.map(piece => {
           const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
           const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
 
-          const hasPLog = productionLogs.some(pl => 
-            pl.slabId === slab.id ||
-            pl.pieceIds?.includes(piece.id) ||
-            (pl.productName && piece.productName && pl.productName.trim().toLowerCase() === piece.productName.trim().toLowerCase())
-          );
-          const hasPieceLog = pieceLogs.some(pl => pl.pieceId === piece.id);
-          const hasProduction = hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active';
+          const hasPLog = 
+            prodLogSlabIds.has(slab.id) ||
+            prodLogPieceIds.has(piece.id) ||
+            Boolean(piece.productName && prodLogProductNames.has(piece.productName.trim().toLowerCase()));
+          const hasPieceLog = pieceLogIds.has(piece.id);
+          const hasProduction = Boolean(hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active');
 
           return {
             ...piece,
@@ -87,9 +106,9 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
           };
         });
 
-        const slabHasPLog = productionLogs.some(pl => pl.slabId === slab.id || (pl.productName && pl.productName.trim().toLowerCase().startsWith(slab.name.trim().toLowerCase())));
+        const slabHasPLog = prodLogSlabIds.has(slab.id) || Array.from(prodLogProductNames).some(pName => pName.startsWith(slab.name.trim().toLowerCase()));
         const slabHasPiecesInProduction = piecesWithProduction.some(p => p.hasProduction);
-        const hasProduction = slabHasPLog || slabHasPiecesInProduction;
+        const hasProduction = Boolean(slabHasPLog || slabHasPiecesInProduction);
 
         return {
           ...slab,
@@ -104,6 +123,7 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
       };
     });
 
+    fastCache.set(cacheKey, cleanProjects, 30);
     res.json(cleanProjects);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching project hierarchy', error });
@@ -113,6 +133,10 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
 // Get all distinct slab names and project/production names
 router.get('/all-names', authenticate, async (req, res) => {
   try {
+    const cacheKey = 'all_names_v2';
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const [slabs, projects, pieces] = await Promise.all([
       prisma.slab.findMany({
         select: {
@@ -165,7 +189,9 @@ router.get('/all-names', authenticate, async (req, res) => {
       }
     });
 
-    res.json(Array.from(namesSet).filter(Boolean));
+    const result = Array.from(namesSet).filter(Boolean);
+    fastCache.set(cacheKey, result, 60);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching names', error });
   }
