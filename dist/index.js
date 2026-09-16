@@ -12,7 +12,12 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || 'mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
+const standardUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&ssl=true&authSource=admin&retryWrites=true&w=majority&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=45000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000';
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
+// If they provided the srv url, try overriding it with standard to fix Hostinger SRV issues
+if (effectiveDbUrl.includes('mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net')) {
+    effectiveDbUrl = standardUri;
+}
 process.env.DATABASE_URL = effectiveDbUrl;
 process.env.MONGO_URI = effectiveDbUrl;
 const app = (0, express_1.default)();
@@ -60,6 +65,48 @@ const slabRoutes_1 = __importDefault(require("./routes/slabRoutes"));
 const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
 const wasteRoutes_1 = __importDefault(require("./routes/wasteRoutes"));
 const packingRoutes_1 = __importDefault(require("./routes/packingRoutes"));
+// TCP/TLS Test route for Hostinger Support
+app.get('/api/test-tcp', (req, res) => {
+    const tls = require('tls');
+    const targetHost = 'ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net';
+    let logs = [];
+    const start = Date.now();
+    logs.push(`Starting TLS connection test to ${targetHost}:27017...`);
+    const socket = tls.connect({ host: targetHost, port: 27017, servername: targetHost, timeout: 10000 }, () => {
+        logs.push(`SUCCESS: TLS connection established to ${targetHost} after ${Date.now() - start}ms`);
+        socket.destroy();
+        res.json({ status: 'success', logs, timeMs: Date.now() - start });
+    });
+    socket.on('timeout', () => {
+        logs.push(`TIMEOUT: TLS connection timed out after ${Date.now() - start}ms`);
+        socket.destroy();
+        res.json({ status: 'timeout', logs, timeMs: Date.now() - start });
+    });
+    socket.on('error', (err) => {
+        logs.push(`ERROR: TLS connection failed with error: ${err.message}`);
+        res.json({ status: 'error', logs, error: err.message, timeMs: Date.now() - start });
+    });
+});
+app.get('/api/test-login-hang', async (req, res) => {
+    const start = Date.now();
+    let step = 'start';
+    try {
+        const bcrypt = require('bcryptjs');
+        const { prisma } = require('./index');
+        step = 'query1';
+        const user = await prisma.user.findFirst({
+            where: { email: 'admin@unnati.com' }
+        });
+        const t1 = Date.now() - start;
+        step = 'bcrypt';
+        const isMatch = await bcrypt.compare('wrong', user ? user.password : 'dummy');
+        const t2 = Date.now() - start - t1;
+        res.json({ success: true, userEmail: user?.email, queryTime: t1, bcryptTime: t2, totalTime: Date.now() - start });
+    }
+    catch (e) {
+        res.json({ success: false, failedAt: step, error: e.message, totalTime: Date.now() - start });
+    }
+});
 // Routes
 const mountRoutes = (prefix = '') => {
     app.use([`${prefix}/auth`, `${prefix}/user-auth`, `${prefix}/session`, `${prefix}/account`], authRoutes_1.default);
