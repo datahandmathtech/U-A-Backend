@@ -12,10 +12,10 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-const standardUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&ssl=true&authSource=admin&retryWrites=true&w=majority&maxIdleTimeMS=30000&serverSelectionTimeoutMS=5000&socketTimeoutMS=45000&connectTimeoutMS=10000&heartbeatFrequencyMS=10000';
+const standardUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&ssl=true&authSource=admin&retryWrites=true&w=majority&maxIdleTimeMS=30000&serverSelectionTimeoutMS=8000&socketTimeoutMS=45000&connectTimeoutMS=10000';
 let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
-// If they provided the srv url, try overriding it with standard to fix Hostinger SRV issues
-if (effectiveDbUrl.includes('mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net')) {
+// If URL is mongodb+srv or missing replicaSet shards, force standard seedlist URI to guarantee 100% connectivity on Hostinger
+if (!effectiveDbUrl || effectiveDbUrl.startsWith('mongodb+srv://') || !effectiveDbUrl.includes('replicaSet=')) {
     effectiveDbUrl = standardUri;
 }
 process.env.DATABASE_URL = effectiveDbUrl;
