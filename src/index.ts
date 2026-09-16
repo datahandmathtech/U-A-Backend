@@ -1,9 +1,3 @@
-import dns from 'dns';
-// Force Node.js to use IPv4 first to avoid Hostinger IPv6 timeout issues with MongoDB Atlas shard nodes
-if (dns.setDefaultResultOrder) {
-  dns.setDefaultResultOrder('ipv4first');
-}
-
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
@@ -14,13 +8,11 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-const DIRECT_REPLICA_SET_URI = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primary&maxPoolSize=25&minPoolSize=2&maxIdleTimeMS=30000&heartbeatFrequencyMS=10000&serverSelectionTimeoutMS=5000&connectTimeoutMS=8000&socketTimeoutMS=45000';
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI;
 
-// Use direct replica set URI to eliminate SRV DNS lookup hangs on cloud hostings like Hostinger
-let effectiveDbUrl = DIRECT_REPLICA_SET_URI;
-
-process.env.DATABASE_URL = effectiveDbUrl;
-process.env.MONGO_URI = effectiveDbUrl;
+if (!effectiveDbUrl) {
+  console.warn('WARNING: No DATABASE_URL or MONGO_URI found in environment variables.');
+}
 
 const app = express();
 const port = process.env.PORT || 5000;

@@ -4,11 +4,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.prisma = void 0;
-const dns_1 = __importDefault(require("dns"));
-// Force Node.js to use IPv4 first to avoid Hostinger IPv6 timeout issues with MongoDB Atlas shard nodes
-if (dns_1.default.setDefaultResultOrder) {
-    dns_1.default.setDefaultResultOrder('ipv4first');
-}
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const compression_1 = __importDefault(require("compression"));
@@ -17,11 +12,10 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-const DIRECT_REPLICA_SET_URI = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primary&maxPoolSize=25&minPoolSize=2&maxIdleTimeMS=30000&heartbeatFrequencyMS=10000&serverSelectionTimeoutMS=5000&connectTimeoutMS=8000&socketTimeoutMS=45000';
-// Use direct replica set URI to eliminate SRV DNS lookup hangs on cloud hostings like Hostinger
-let effectiveDbUrl = DIRECT_REPLICA_SET_URI;
-process.env.DATABASE_URL = effectiveDbUrl;
-process.env.MONGO_URI = effectiveDbUrl;
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI;
+if (!effectiveDbUrl) {
+    console.warn('WARNING: No DATABASE_URL or MONGO_URI found in environment variables.');
+}
 const app = (0, express_1.default)();
 const port = process.env.PORT || 5000;
 exports.prisma = new client_1.PrismaClient({
