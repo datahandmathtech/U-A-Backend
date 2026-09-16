@@ -141,11 +141,14 @@ router.post('/register', async (req, res) => {
 router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res) => {
     try {
         const { email: emailOrStaffId, password } = req.body;
+        if (!emailOrStaffId || !password) {
+            return res.status(400).json({ message: 'Email/Staff ID and password are required' });
+        }
         console.log('Login attempt for:', emailOrStaffId);
         const cleanInput = (emailOrStaffId || '').trim();
-        // Fast indexed path: Exact match on unique indexed fields (email, staffId, name)
+        // Fast indexed path: Exact match on unique indexed fields (email, staffId, name) with 6-second timeout
         const capitalizedInput = cleanInput.length > 0 ? (cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1).toLowerCase()) : cleanInput;
-        let user = await index_1.prisma.user.findFirst({
+        const findUserPromise = index_1.prisma.user.findFirst({
             where: {
                 OR: [
                     { email: cleanInput },
@@ -157,6 +160,8 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
                 ]
             }
         });
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Database connection timed out. Please verify MongoDB Atlas IP Whitelist (0.0.0.0/0) and server status.')), 6000));
+        let user = await Promise.race([findUserPromise, timeoutPromise]);
         // Fallback path: Case-insensitive search if exact lookup returned null
         if (!user) {
             user = await index_1.prisma.user.findFirst({
@@ -171,11 +176,11 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
         }
         console.log('User found:', user ? user.email : 'None');
         if (!user) {
-            return res.status(400).json({ message: 'Invalid credentials' });
+            return res.status(400).json({ message: 'Invalid credentials. User not found.' });
         }
         const isMatch = await bcryptjs_1.default.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({ message: 'Invalid credentials' });
+            return res.status(400).json({ message: 'Invalid credentials. Incorrect password.' });
         }
         const token = jsonwebtoken_1.default.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET || 'secret', { expiresIn: '1d' });
         res.json({
@@ -191,7 +196,7 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
     }
     catch (error) {
         console.error('Login Error:', error);
-        res.status(500).json({ message: 'Server error: ' + error.message });
+        res.status(500).json({ message: error.message || 'Server error during login' });
     }
 });
 exports.default = router;
