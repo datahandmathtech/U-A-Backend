@@ -61,31 +61,31 @@ import vendorRoutes from './routes/vendorRoutes';
 import wasteRoutes from './routes/wasteRoutes';
 import packingRoutes from './routes/packingRoutes';
 
-// TCP Test route for Hostinger Support
+// TCP/TLS Test route for Hostinger Support
 app.get('/api/test-tcp', (req, res) => {
-  const net = require('net');
-  const targetIp = '159.41.234.132';
+  const tls = require('tls');
+  const targetHost = 'ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net';
   let logs = [];
   const start = Date.now();
-  logs.push(`Starting TCP connection test to ${targetIp}:27017...`);
+  logs.push(`Starting TLS connection test to ${targetHost}:27017...`);
   
-  const socket = net.createConnection(
-    { host: targetIp, port: 27017, timeout: 10000 },
+  const socket = tls.connect(
+    { host: targetHost, port: 27017, servername: targetHost, timeout: 10000 },
     () => {
-      logs.push(`SUCCESS: TCP connection established to ${targetIp} after ${Date.now() - start}ms`);
+      logs.push(`SUCCESS: TLS connection established to ${targetHost} after ${Date.now() - start}ms`);
       socket.destroy();
       res.json({ status: 'success', logs, timeMs: Date.now() - start });
     }
   );
 
   socket.on('timeout', () => {
-    logs.push(`TIMEOUT: TCP connection timed out after ${Date.now() - start}ms`);
+    logs.push(`TIMEOUT: TLS connection timed out after ${Date.now() - start}ms`);
     socket.destroy();
     res.json({ status: 'timeout', logs, timeMs: Date.now() - start });
   });
 
   socket.on('error', (err: any) => {
-    logs.push(`ERROR: TCP connection failed with error: ${err.message}`);
+    logs.push(`ERROR: TLS connection failed with error: ${err.message}`);
     res.json({ status: 'error', logs, error: err.message, timeMs: Date.now() - start });
   });
 });
