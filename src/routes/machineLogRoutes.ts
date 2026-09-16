@@ -215,7 +215,8 @@ router.post('/clock-out', authenticate, async (req, res) => {
         workerId: log.operatorId,
         parentLogId: log.id,
         approvalStatus: 'pending',
-        status: 'completed'
+        status: 'completed',
+        remarks: remarks || log.remarks || undefined
       }
     });
     

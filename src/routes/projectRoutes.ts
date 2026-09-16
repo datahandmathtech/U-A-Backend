@@ -15,7 +15,16 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: { 
         assignedTo: { select: { name: true } },
-        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 }
+        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+        slabs: {
+          include: {
+            pieces: {
+              include: {
+                logs: true
+              }
+            }
+          }
+        }
       }
     });
 
