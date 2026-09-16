@@ -90,6 +90,29 @@ app.get('/api/test-tcp', (req, res) => {
   });
 });
 
+app.get('/api/test-login-hang', async (req, res) => {
+  const start = Date.now();
+  let step = 'start';
+  try {
+    const bcrypt = require('bcryptjs');
+    const { prisma } = require('./index');
+    
+    step = 'query1';
+    const user = await prisma.user.findFirst({
+      where: { email: 'admin@unnati.com' }
+    });
+    const t1 = Date.now() - start;
+    
+    step = 'bcrypt';
+    const isMatch = await bcrypt.compare('wrong', user ? user.password : 'dummy');
+    const t2 = Date.now() - start - t1;
+    
+    res.json({ success: true, userEmail: user?.email, queryTime: t1, bcryptTime: t2, totalTime: Date.now() - start });
+  } catch (e: any) {
+    res.json({ success: false, failedAt: step, error: e.message, totalTime: Date.now() - start });
+  }
+});
+
 // Routes
 const mountRoutes = (prefix = '') => {
   app.use([`${prefix}/auth`, `${prefix}/user-auth`, `${prefix}/session`, `${prefix}/account`], authRoutes);
