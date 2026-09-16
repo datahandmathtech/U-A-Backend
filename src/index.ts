@@ -8,11 +8,9 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI;
-
-if (!effectiveDbUrl) {
-  console.warn('WARNING: No DATABASE_URL or MONGO_URI found in environment variables.');
-}
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || 'mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
+process.env.DATABASE_URL = effectiveDbUrl;
+process.env.MONGO_URI = effectiveDbUrl;
 
 const app = express();
 const port = process.env.PORT || 5000;

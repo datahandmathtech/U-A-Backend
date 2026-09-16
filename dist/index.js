@@ -12,10 +12,9 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const client_1 = require("@prisma/client");
 dotenv_1.default.config();
-let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI;
-if (!effectiveDbUrl) {
-    console.warn('WARNING: No DATABASE_URL or MONGO_URI found in environment variables.');
-}
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || 'mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
+process.env.DATABASE_URL = effectiveDbUrl;
+process.env.MONGO_URI = effectiveDbUrl;
 const app = (0, express_1.default)();
 const port = process.env.PORT || 5000;
 exports.prisma = new client_1.PrismaClient({
