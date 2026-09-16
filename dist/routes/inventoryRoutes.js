@@ -246,7 +246,7 @@ router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) =>
 // Manual deduct stock (and optional waste)
 router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { inventoryId, usedQuantity, wasteQuantity, projectName, projectId, slabId, pieceId, pieceName, length, width, thickness, date } = req.body;
+        const { inventoryId, usedQuantity, wasteQuantity, projectName, projectId, slabId, pieceId, pieceName, length, width, thickness, unit, date } = req.body;
         const used = Number(usedQuantity) || 0;
         const waste = Number(wasteQuantity) || 0;
         const totalDeduct = used + waste;
@@ -301,7 +301,9 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
                             }
                         });
                     }
-                    const usedSizeStr = (length && width) ? `${length}L x ${width}W${thickness ? ` | ${thickness}MM` : ''}` : null;
+                    const usedSizeStr = (length && width)
+                        ? `${length}${unit === 'feet' ? 'ft' : 'L'} x ${width}${unit === 'feet' ? 'ft' : 'W'}${thickness ? ` | ${thickness}MM` : ''}`
+                        : null;
                     await index_1.prisma.piece.update({
                         where: { id: pieceId },
                         data: {
@@ -319,8 +321,12 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
             }).catch(() => { });
         }
         const createdAt = date ? new Date(date) : new Date();
-        // Clean project and piece name remarks only
-        let outRemarks = projectName ? `${projectName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
+        // Clean project and piece name remarks only without duplicating brackets
+        let cleanProjName = (projectName || '').replace(/\s*\(\d+(?:\.\d+)?\s*L?\s*[xX]\s*\d+(?:\.\d+)?\s*W?[^)]*\)/gi, '').trim();
+        let outRemarks = cleanProjName ? `${cleanProjName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
+        if (length && width) {
+            outRemarks += ` (${length}${unit === 'feet' ? 'ft' : 'L'} x ${width}${unit === 'feet' ? 'ft' : 'W'} | ${used.toFixed(2)} Sq.Ft)`;
+        }
         // Create OUT log for Used
         if (used > 0) {
             await index_1.prisma.inventoryLog.create({

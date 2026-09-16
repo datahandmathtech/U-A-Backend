@@ -8,7 +8,7 @@ const router = (0, express_1.Router)();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const [projects, outLogs] = await Promise.all([
+        const [projects, outLogs, productionLogs, pieceLogs] = await Promise.all([
             index_1.prisma.project.findMany({
                 select: {
                     id: true,
@@ -40,24 +40,59 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
             index_1.prisma.inventoryLog.findMany({
                 where: { type: 'OUT' },
                 select: { remarks: true }
+            }),
+            index_1.prisma.productionLog.findMany({
+                select: {
+                    id: true,
+                    stage: true,
+                    status: true,
+                    approvalStatus: true,
+                    slabId: true,
+                    pieceIds: true,
+                    productName: true
+                }
+            }),
+            index_1.prisma.pieceLog.findMany({
+                select: {
+                    id: true,
+                    pieceId: true,
+                    status: true,
+                    stage: true
+                }
             })
         ]);
         const activePieceRemarks = outLogs.map(l => l.remarks || '').join(' ');
-        const cleanProjects = projects.map(proj => ({
-            ...proj,
-            slabs: proj.slabs.map(slab => ({
-                ...slab,
-                pieces: slab.pieces.map(piece => {
+        const cleanProjects = projects.map(proj => {
+            const slabsWithProduction = proj.slabs.map(slab => {
+                const piecesWithProduction = slab.pieces.map(piece => {
                     const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
                     const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
+                    const hasPLog = productionLogs.some(pl => pl.slabId === slab.id ||
+                        pl.pieceIds?.includes(piece.id) ||
+                        (pl.productName && piece.productName && pl.productName.trim().toLowerCase() === piece.productName.trim().toLowerCase()));
+                    const hasPieceLog = pieceLogs.some(pl => pl.pieceId === piece.id);
+                    const hasProduction = hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active';
                     return {
                         ...piece,
+                        hasProduction,
                         sourceMaterialId: isActuallyLogged ? piece.sourceMaterialId : null,
                         vendorName: isActuallyLogged ? piece.vendorName : null
                     };
-                })
-            }))
-        }));
+                });
+                const slabHasPLog = productionLogs.some(pl => pl.slabId === slab.id || (pl.productName && pl.productName.trim().toLowerCase().startsWith(slab.name.trim().toLowerCase())));
+                const slabHasPiecesInProduction = piecesWithProduction.some(p => p.hasProduction);
+                const hasProduction = slabHasPLog || slabHasPiecesInProduction;
+                return {
+                    ...slab,
+                    hasProduction,
+                    pieces: piecesWithProduction
+                };
+            });
+            return {
+                ...proj,
+                slabs: slabsWithProduction
+            };
+        });
         res.json(cleanProjects);
     }
     catch (error) {

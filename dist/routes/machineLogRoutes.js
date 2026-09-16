@@ -207,7 +207,8 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
                 workerId: log.operatorId,
                 parentLogId: log.id,
                 approvalStatus: 'pending',
-                status: 'completed'
+                status: 'completed',
+                remarks: remarks || log.remarks || undefined
             }
         });
         fastCache_1.fastCache.invalidate('all_machine_logs');
