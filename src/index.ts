@@ -8,7 +8,14 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || 'mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
+const standardUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?replicaSet=atlas-icn4hi-shard-0&ssl=true&authSource=admin&retryWrites=true&w=majority';
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
+
+// If they provided the srv url, try overriding it with standard to fix Hostinger SRV issues
+if (effectiveDbUrl.includes('mongodb+srv://yatree_admin:Mayank123@cluster0.iuq9w0n.mongodb.net')) {
+  effectiveDbUrl = standardUri;
+}
+
 process.env.DATABASE_URL = effectiveDbUrl;
 process.env.MONGO_URI = effectiveDbUrl;
 
