@@ -163,8 +163,14 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
 
 
     let addedCount = 0;
+    let updatedCount = 0;
+    
+    // Fetch full existing slabs for comparison
+    const fullExistingSlabs = await prisma.slab.findMany({ where: { projectId: String(id) } });
+    const slabMap = new Map(fullExistingSlabs.map(s => [s.name, s]));
+
     for (const desired of desiredSlabs) {
-      if (!existingNames.has(desired.name)) {
+      if (!slabMap.has(desired.name)) {
         await prisma.slab.create({
           data: {
             projectId: project.id,
@@ -173,8 +179,18 @@ router.post('/:id/sync-slabs', authenticate, async (req, res) => {
             status: 'pending'
           }
         });
-        existingNames.add(desired.name);
+        slabMap.set(desired.name, { name: desired.name } as any);
         addedCount++;
+      } else {
+        // Update size if it has changed
+        const existing = slabMap.get(desired.name);
+        if (existing && existing.size !== desired.size) {
+          await prisma.slab.update({
+            where: { id: existing.id },
+            data: { size: desired.size }
+          });
+          updatedCount++;
+        }
       }
     }
 
