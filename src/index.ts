@@ -84,7 +84,7 @@ app.get('/api/test-tcp', (req, res) => {
     res.json({ status: 'timeout', logs, timeMs: Date.now() - start });
   });
 
-  socket.on('error', (err) => {
+  socket.on('error', (err: any) => {
     logs.push(`ERROR: TCP connection failed with error: ${err.message}`);
     res.json({ status: 'error', logs, error: err.message, timeMs: Date.now() - start });
   });
