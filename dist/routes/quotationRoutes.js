@@ -51,7 +51,7 @@ router.post('/terms', authMiddleware_1.authenticate, async (req, res) => {
 // Create Quotation
 router.post('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { projectId, marginPercentage, products, additionalCosts, terms } = req.body;
+        const { projectId, marginPercentage, products, additionalCosts, terms, globalCosts } = req.body;
         // Calculate products total if available
         const productsTotal = products && Array.isArray(products)
             ? products.reduce((sum, p) => sum + Number(p.amount || 0), 0)
@@ -109,6 +109,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 products: products || [],
                 additionalCosts: additionalCosts || {},
                 terms: terms || [],
+                globalCosts: globalCosts || {},
                 status: 'draft'
             }
         });
@@ -122,7 +123,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const { products, additionalCosts, terms } = req.body;
+        const { products, additionalCosts, terms, globalCosts } = req.body;
         const productsTotal = products && Array.isArray(products)
             ? products.reduce((sum, p) => sum + Number(p.amount || 0), 0)
             : 0;
@@ -144,6 +145,7 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 products: products || [],
                 ...(additionalCosts !== undefined ? { additionalCosts } : {}),
                 ...(terms !== undefined ? { terms } : {}),
+                ...(globalCosts !== undefined ? { globalCosts } : {}),
                 totalCost,
                 finalAmount: totalCost,
             },

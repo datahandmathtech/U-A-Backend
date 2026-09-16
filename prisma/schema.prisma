@@ -189,6 +189,7 @@ model Quotation {
   additionalCosts  Json?
   status           String   @default("draft") // draft, sent, approved, rejected
   terms            String[] @default([])
+  globalCosts      Json?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }

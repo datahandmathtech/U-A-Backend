@@ -52,7 +52,7 @@ router.post('/terms', authenticate, async (req, res) => {
 router.post('/', authenticate, async (req, res) => {
   try {
     const { 
-      projectId, marginPercentage, products, additionalCosts, terms
+      projectId, marginPercentage, products, additionalCosts, terms, globalCosts
     } = req.body;
     
     // Calculate products total if available
@@ -89,7 +89,18 @@ router.post('/', authenticate, async (req, res) => {
     });
 
     const totalCost = productsTotal + additionalTotal;
-    const finalAmount = totalCost + (totalCost * (Number(marginPercentage || 0) / 100));
+    
+    let globalCostsTotal = 0;
+    let gstPercent = 0;
+    if (globalCosts) {
+      if (globalCosts.packageCostEnabled) globalCostsTotal += Number(globalCosts.packageCost || 0);
+      if (globalCosts.transportCostEnabled) globalCostsTotal += Number(globalCosts.transportCost || 0);
+      gstPercent = Number(globalCosts.gstPercent || 0);
+    }
+    const subTotal = totalCost + globalCostsTotal;
+    // Fallback to marginPercentage if gstPercent is 0 just in case old code sends it
+    const effectiveGst = gstPercent > 0 ? gstPercent : Number(marginPercentage || 0);
+    const finalAmountWithGst = Math.round(subTotal + ((subTotal * effectiveGst) / 100));
 
     const newQuotation = await prisma.quotation.create({
       data: {
@@ -102,12 +113,13 @@ router.post('/', authenticate, async (req, res) => {
         packingCost: packCost,
         transportCost: transCost,
         installationCost: instCost,
-        marginPercentage: Number(marginPercentage || 0),
+        marginPercentage: effectiveGst,
         totalCost,
-        finalAmount,
+        finalAmount: finalAmountWithGst,
         products: products || [],
         additionalCosts: additionalCosts || {},
         terms: terms || [],
+        globalCosts: globalCosts || {},
         status: 'draft'
       }
     });
@@ -122,7 +134,7 @@ router.post('/', authenticate, async (req, res) => {
 router.patch('/:id', authenticate, async (req: any, res: any) => {
   try {
     const { id } = req.params;
-    const { products, additionalCosts, terms } = req.body;
+    const { products, additionalCosts, terms, globalCosts } = req.body;
 
     const productsTotal = products && Array.isArray(products)
       ? products.reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0)
@@ -139,6 +151,16 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
 
     const additionalTotal = additionalCostsList.reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
     const totalCost = productsTotal + additionalTotal;
+    
+    let globalCostsTotal = 0;
+    let gstPercent = 0;
+    if (globalCosts) {
+      if (globalCosts.packageCostEnabled) globalCostsTotal += Number(globalCosts.packageCost || 0);
+      if (globalCosts.transportCostEnabled) globalCostsTotal += Number(globalCosts.transportCost || 0);
+      gstPercent = Number(globalCosts.gstPercent || 0);
+    }
+    const subTotal = totalCost + globalCostsTotal;
+    const finalAmountWithGst = Math.round(subTotal + ((subTotal * gstPercent) / 100));
 
     const updated = await prisma.quotation.update({
       where: { id: String(id) },
@@ -146,8 +168,9 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
         products: products || [],
         ...(additionalCosts !== undefined ? { additionalCosts } : {}),
         ...(terms !== undefined ? { terms } : {}),
+        ...(globalCosts !== undefined ? { globalCosts } : {}),
         totalCost,
-        finalAmount: totalCost,
+        finalAmount: finalAmountWithGst,
       },
       include: {
         project: {
