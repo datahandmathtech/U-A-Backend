@@ -61,6 +61,35 @@ import vendorRoutes from './routes/vendorRoutes';
 import wasteRoutes from './routes/wasteRoutes';
 import packingRoutes from './routes/packingRoutes';
 
+// TCP Test route for Hostinger Support
+app.get('/api/test-tcp', (req, res) => {
+  const net = require('net');
+  const targetIp = '159.41.234.132';
+  let logs = [];
+  const start = Date.now();
+  logs.push(`Starting TCP connection test to ${targetIp}:27017...`);
+  
+  const socket = net.createConnection(
+    { host: targetIp, port: 27017, timeout: 10000 },
+    () => {
+      logs.push(`SUCCESS: TCP connection established to ${targetIp} after ${Date.now() - start}ms`);
+      socket.destroy();
+      res.json({ status: 'success', logs, timeMs: Date.now() - start });
+    }
+  );
+
+  socket.on('timeout', () => {
+    logs.push(`TIMEOUT: TCP connection timed out after ${Date.now() - start}ms`);
+    socket.destroy();
+    res.json({ status: 'timeout', logs, timeMs: Date.now() - start });
+  });
+
+  socket.on('error', (err) => {
+    logs.push(`ERROR: TCP connection failed with error: ${err.message}`);
+    res.json({ status: 'error', logs, error: err.message, timeMs: Date.now() - start });
+  });
+});
+
 // Routes
 const mountRoutes = (prefix = '') => {
   app.use([`${prefix}/auth`, `${prefix}/user-auth`, `${prefix}/session`, `${prefix}/account`], authRoutes);
