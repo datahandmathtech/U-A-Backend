@@ -123,10 +123,10 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
 
     const cleanInput = (emailOrStaffId || '').trim();
 
-    // Fast indexed path: Exact match on unique indexed fields (email, staffId, name) with 6-second timeout
+    // Fast indexed path: Exact match on unique indexed fields (email, staffId, name)
     const capitalizedInput = cleanInput.length > 0 ? (cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1).toLowerCase()) : cleanInput;
     
-    const findUserPromise = prisma.user.findFirst({
+    let user: any = await prisma.user.findFirst({
       where: {
         OR: [
           { email: cleanInput },
@@ -138,12 +138,6 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
         ]
       }
     });
-
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Database connection timed out. Please verify MongoDB Atlas IP Whitelist (0.0.0.0/0) and server status.')), 6000)
-    );
-
-    let user: any = await Promise.race([findUserPromise, timeoutPromise]);
 
     // Fallback path: Case-insensitive search if exact lookup returned null
     if (!user) {
