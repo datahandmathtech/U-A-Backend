@@ -20,6 +20,11 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
           name: true,
           projectId: true,
           clientName: true,
+          quotations: {
+            select: {
+              products: true
+            }
+          },
           slabs: {
             select: {
               id: true,
@@ -86,7 +91,21 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
     const pieceLogIds = new Set(pieceLogs.map(pl => pl.pieceId));
 
     const cleanProjects = projects.map(proj => {
+      const products = Array.isArray(proj.quotations?.[0]?.products) 
+        ? (proj.quotations[0].products as any[]) 
+        : [];
+
       const slabsWithProduction = proj.slabs.map(slab => {
+        const matchedProduct = products.find((p: any) => 
+          (p.category && slab.name.startsWith(p.category)) || 
+          (p.productName && (slab.name === p.productName || slab.name.startsWith(p.productName)))
+        );
+
+        const rawUnit = (matchedProduct?.unit || (slab.size?.toLowerCase().includes('mm') ? 'mm' : (slab.size?.toLowerCase().includes('ft') ? 'feet' : 'inch'))).toLowerCase();
+        const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft')) 
+          ? 'feet' 
+          : (rawUnit.includes('mm') ? 'mm' : 'inch');
+
         const piecesWithProduction = slab.pieces.map(piece => {
           const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
           const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
@@ -100,6 +119,7 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
 
           return {
             ...piece,
+            unit: slabUnit,
             hasProduction,
             sourceMaterialId: isActuallyLogged ? piece.sourceMaterialId : null,
             vendorName: isActuallyLogged ? piece.vendorName : null
@@ -109,10 +129,13 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
         const slabHasPLog = prodLogSlabIds.has(slab.id) || Array.from(prodLogProductNames).some(pName => pName.startsWith(slab.name.trim().toLowerCase()));
         const slabHasPiecesInProduction = piecesWithProduction.some(p => p.hasProduction);
         const hasProduction = Boolean(slabHasPLog || slabHasPiecesInProduction);
+        const pendingPieces = piecesWithProduction.filter(p => !p.sourceMaterialId);
 
         return {
           ...slab,
+          unit: slabUnit,
           hasProduction,
+          pendingPiecesCount: pendingPieces.length,
           pieces: piecesWithProduction
         };
       });
@@ -461,17 +484,23 @@ router.delete('/:id', authenticate, async (req, res) => {
     const pieces = await prisma.piece.findMany({ where: { slabId: String(id) } });
     const pieceIds = pieces.map(p => p.id);
     
-    await prisma.pieceLog.deleteMany({
-      where: { pieceId: { in: pieceIds } }
-    });
+    if (pieceIds.length > 0) {
+      await prisma.pieceLog.deleteMany({
+        where: { pieceId: { in: pieceIds } }
+      }).catch(e => console.error(e));
+    }
     
     await prisma.piece.deleteMany({
       where: { slabId: String(id) }
-    });
+    }).catch(e => console.error(e));
 
-    await prisma.slab.delete({
+    await prisma.slab.deleteMany({
       where: { id: String(id) }
-    });
+    }).catch(e => console.error(e));
+
+    fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('project_hierarchy_v3');
+    fastCache.invalidate('all_names_v2');
 
     res.json({ message: 'Slab deleted successfully' });
   } catch (error) {
@@ -502,12 +531,16 @@ router.delete('/piece/:id', authenticate, async (req, res) => {
     // First delete associated logs
     await prisma.pieceLog.deleteMany({
       where: { pieceId: String(id) }
-    });
+    }).catch(e => console.error(e));
     
     // Delete piece
-    await prisma.piece.delete({
+    await prisma.piece.deleteMany({
       where: { id: String(id) }
-    });
+    }).catch(e => console.error(e));
+
+    fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('project_hierarchy_v3');
+    fastCache.invalidate('all_names_v2');
     
     res.json({ message: 'Piece deleted successfully' });
   } catch (error) {

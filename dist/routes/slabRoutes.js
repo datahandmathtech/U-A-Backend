@@ -19,6 +19,11 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                     name: true,
                     projectId: true,
                     clientName: true,
+                    quotations: {
+                        select: {
+                            products: true
+                        }
+                    },
                     slabs: {
                         select: {
                             id: true,
@@ -82,7 +87,16 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
         }
         const pieceLogIds = new Set(pieceLogs.map(pl => pl.pieceId));
         const cleanProjects = projects.map(proj => {
+            const products = Array.isArray(proj.quotations?.[0]?.products)
+                ? proj.quotations[0].products
+                : [];
             const slabsWithProduction = proj.slabs.map(slab => {
+                const matchedProduct = products.find((p) => (p.category && slab.name.startsWith(p.category)) ||
+                    (p.productName && (slab.name === p.productName || slab.name.startsWith(p.productName))));
+                const rawUnit = (matchedProduct?.unit || (slab.size?.toLowerCase().includes('mm') ? 'mm' : (slab.size?.toLowerCase().includes('ft') ? 'feet' : 'inch'))).toLowerCase();
+                const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft'))
+                    ? 'feet'
+                    : (rawUnit.includes('mm') ? 'mm' : 'inch');
                 const piecesWithProduction = slab.pieces.map(piece => {
                     const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
                     const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
@@ -93,6 +107,7 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                     const hasProduction = Boolean(hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active');
                     return {
                         ...piece,
+                        unit: slabUnit,
                         hasProduction,
                         sourceMaterialId: isActuallyLogged ? piece.sourceMaterialId : null,
                         vendorName: isActuallyLogged ? piece.vendorName : null
@@ -101,9 +116,12 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                 const slabHasPLog = prodLogSlabIds.has(slab.id) || Array.from(prodLogProductNames).some(pName => pName.startsWith(slab.name.trim().toLowerCase()));
                 const slabHasPiecesInProduction = piecesWithProduction.some(p => p.hasProduction);
                 const hasProduction = Boolean(slabHasPLog || slabHasPiecesInProduction);
+                const pendingPieces = piecesWithProduction.filter(p => !p.sourceMaterialId);
                 return {
                     ...slab,
+                    unit: slabUnit,
                     hasProduction,
+                    pendingPiecesCount: pendingPieces.length,
                     pieces: piecesWithProduction
                 };
             });
@@ -424,15 +442,20 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         // Find all pieces
         const pieces = await index_1.prisma.piece.findMany({ where: { slabId: String(id) } });
         const pieceIds = pieces.map(p => p.id);
-        await index_1.prisma.pieceLog.deleteMany({
-            where: { pieceId: { in: pieceIds } }
-        });
+        if (pieceIds.length > 0) {
+            await index_1.prisma.pieceLog.deleteMany({
+                where: { pieceId: { in: pieceIds } }
+            }).catch(e => console.error(e));
+        }
         await index_1.prisma.piece.deleteMany({
             where: { slabId: String(id) }
-        });
-        await index_1.prisma.slab.delete({
+        }).catch(e => console.error(e));
+        await index_1.prisma.slab.deleteMany({
             where: { id: String(id) }
-        });
+        }).catch(e => console.error(e));
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
+        fastCache_1.fastCache.invalidate('all_names_v2');
         res.json({ message: 'Slab deleted successfully' });
     }
     catch (error) {
@@ -461,11 +484,14 @@ router.delete('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
         // First delete associated logs
         await index_1.prisma.pieceLog.deleteMany({
             where: { pieceId: String(id) }
-        });
+        }).catch(e => console.error(e));
         // Delete piece
-        await index_1.prisma.piece.delete({
+        await index_1.prisma.piece.deleteMany({
             where: { id: String(id) }
-        });
+        }).catch(e => console.error(e));
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
+        fastCache_1.fastCache.invalidate('all_names_v2');
         res.json({ message: 'Piece deleted successfully' });
     }
     catch (error) {

@@ -398,13 +398,42 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
         let updatedLog;
         if (splits && splits.length > 0 && approvalStatus === 'approved') {
             const totalSplitQty = splits.reduce((acc, s) => acc + Number(s.qty || 0), 0);
-            const remainingQty = (Number(originalLog.quantityProduced) || 0) - totalSplitQty;
+            const rejectedPieces = req.body.rejectedPieces;
+            const rejectedQty = rejectedPieces && Number(rejectedPieces.qty) > 0 ? Number(rejectedPieces.qty) : 0;
+            const totalHandledQty = totalSplitQty + rejectedQty;
+            const remainingPendingQty = (Number(originalLog.quantityProduced) || 0) - totalHandledQty;
             const { id: _id, createdAt, updatedAt, ...restLogData } = originalLog;
-            if (remainingQty > 0) {
-                // Partial approval: Keep original log pending with remainder, create new logs for all splits
+            // Handle rejected portion if provided
+            if (rejectedQty > 0) {
+                try {
+                    const rejectedStartPhotos = {
+                        ...(typeof originalLog.startPhotos === 'object' && originalLog.startPhotos !== null ? originalLog.startPhotos : {}),
+                        ...(rejectedPieces.rejectionPhoto ? { rejectionPhoto: rejectedPieces.rejectionPhoto } : {})
+                    };
+                    await index_1.prisma.productionLog.create({
+                        data: {
+                            ...restLogData,
+                            approvalStatus: 'rejected_admin',
+                            quantityProduced: rejectedQty,
+                            remarks: rejectedPieces.remarks || remarks || 'Rejected by Admin during approval',
+                            pieceIds: rejectedPieces.pieceIds && Array.isArray(rejectedPieces.pieceIds) ? rejectedPieces.pieceIds : [],
+                            startPhotos: rejectedStartPhotos,
+                            projectId: originalLog.projectId || (splits[0]?.projectId ? String(splits[0].projectId) : undefined),
+                            productId: originalLog.productId || (splits[0]?.productId ? String(splits[0].productId) : undefined),
+                            productName: rejectedPieces.productName || (originalLog.productName ? `${originalLog.productName.split(' - ')[0]} (${rejectedQty} Pcs)` : undefined),
+                            slabId: originalLog.slabId || (splits[0]?.slabId ? String(splits[0].slabId) : undefined),
+                        }
+                    });
+                }
+                catch (rejErr) {
+                    console.warn('Could not create rejected production log during partial approval:', rejErr);
+                }
+            }
+            if (remainingPendingQty > 0) {
+                // Partial approval with pending remainder: Keep original log pending with remainder, create new logs for all splits
                 updatedLog = await index_1.prisma.productionLog.update({
                     where: { id: String(id) },
-                    data: { quantityProduced: remainingQty } // stays pending
+                    data: { quantityProduced: remainingPendingQty } // stays pending
                 });
                 for (const split of splits) {
                     const newSplitLog = await index_1.prisma.productionLog.create({
@@ -467,12 +496,12 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 }
             }
             else {
-                // Full approval
+                // Full approval / all handled (splits + optional rejection)
                 const firstSplit = splits[0];
                 updatedLog = await index_1.prisma.productionLog.update({
                     where: { id: String(id) },
                     data: {
-                        approvalStatus,
+                        approvalStatus: 'approved',
                         projectId: firstSplit.projectId ? String(firstSplit.projectId) : undefined,
                         productId: firstSplit.productId ? String(firstSplit.productId) : undefined,
                         productName: firstSplit.productName ? String(firstSplit.productName) : undefined,
@@ -642,58 +671,89 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
             }
         }
         else {
-            updatedLog = await index_1.prisma.productionLog.update({
-                where: { id: String(id) },
-                data: {
-                    approvalStatus,
-                    projectId: projectId ? String(projectId) : undefined,
-                    remarks: remarks !== undefined ? String(remarks) : undefined,
-                    ...(req.body.machineId && { machineId: req.body.machineId }),
-                    ...(req.body.startPhotos && { startPhotos: req.body.startPhotos })
-                }
-            });
-            // Auto-deduct from Inventory for completed OUT items (or Production Work)
-            if (approvalStatus === 'approved' && (updatedLog.transactionType === 'OUT' || updatedLog.stage === 'Production Work')) {
-                try {
-                    const materialNameToMatch = String(updatedLog.productName || originalLog.productName || '').toLowerCase();
-                    if (materialNameToMatch) {
-                        const inventories = await index_1.prisma.inventory.findMany({});
-                        const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
-                            inv.itemName.toLowerCase().includes(materialNameToMatch));
-                        if (match) {
-                            const qtyToDeduct = Number(updatedLog.quantityProduced);
-                            if (qtyToDeduct > 0) {
-                                await index_1.prisma.inventory.update({
-                                    where: { id: match.id },
-                                    data: { quantity: { decrement: qtyToDeduct } }
-                                });
-                                const proj = updatedLog.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(updatedLog.projectId) } }) : null;
-                                if (updatedLog.projectId) {
-                                    const pm = await index_1.prisma.projectMaterial.findFirst({
-                                        where: { projectId: String(updatedLog.projectId), inventoryId: match.id, isConsumed: false }
+            // Rejection or direct approval without splits
+            const { id: _id, createdAt, updatedAt, ...restLogData } = originalLog;
+            const rejectedQty = Number(req.body.rejectedQty || originalLog.quantityProduced) || 0;
+            const rejPhoto = req.body.rejectionPhoto || req.body.startPhotos?.rejectionPhoto;
+            const mergedStartPhotos = {
+                ...(typeof originalLog.startPhotos === 'object' && originalLog.startPhotos !== null ? originalLog.startPhotos : {}),
+                ...(req.body.startPhotos || {}),
+                ...(rejPhoto ? { rejectionPhoto: rejPhoto } : {})
+            };
+            if (approvalStatus === 'rejected_admin' && rejectedQty < (Number(originalLog.quantityProduced) || 0) && rejectedQty > 0) {
+                // Partial rejection: split into rejected log and remaining pending log
+                const remainingQty = (Number(originalLog.quantityProduced) || 0) - rejectedQty;
+                await index_1.prisma.productionLog.update({
+                    where: { id: String(id) },
+                    data: { quantityProduced: remainingQty }
+                });
+                updatedLog = await index_1.prisma.productionLog.create({
+                    data: {
+                        ...restLogData,
+                        approvalStatus: 'rejected_admin',
+                        quantityProduced: rejectedQty,
+                        remarks: remarks !== undefined ? String(remarks) : undefined,
+                        startPhotos: mergedStartPhotos,
+                        productName: req.body.productName || (originalLog.productName ? `${originalLog.productName.split(' - ')[0]} (${rejectedQty} Pcs)` : undefined),
+                        ...(req.body.pieceIds && { pieceIds: req.body.pieceIds })
+                    }
+                });
+            }
+            else {
+                updatedLog = await index_1.prisma.productionLog.update({
+                    where: { id: String(id) },
+                    data: {
+                        approvalStatus,
+                        projectId: projectId ? String(projectId) : undefined,
+                        remarks: remarks !== undefined ? String(remarks) : undefined,
+                        ...(req.body.machineId && { machineId: req.body.machineId }),
+                        startPhotos: mergedStartPhotos,
+                        ...(req.body.pieceIds && { pieceIds: req.body.pieceIds })
+                    }
+                });
+                // Auto-deduct from Inventory for completed OUT items (or Production Work)
+                if (approvalStatus === 'approved' && (updatedLog.transactionType === 'OUT' || updatedLog.stage === 'Production Work')) {
+                    try {
+                        const materialNameToMatch = String(updatedLog.productName || originalLog.productName || '').toLowerCase();
+                        if (materialNameToMatch) {
+                            const inventories = await index_1.prisma.inventory.findMany({});
+                            const match = inventories.find(inv => materialNameToMatch.includes(inv.itemName.toLowerCase()) ||
+                                inv.itemName.toLowerCase().includes(materialNameToMatch));
+                            if (match) {
+                                const qtyToDeduct = Number(updatedLog.quantityProduced);
+                                if (qtyToDeduct > 0) {
+                                    await index_1.prisma.inventory.update({
+                                        where: { id: match.id },
+                                        data: { quantity: { decrement: qtyToDeduct } }
                                     });
-                                    if (pm) {
-                                        const waste = Math.max(0, pm.quantity - qtyToDeduct);
-                                        await index_1.prisma.projectMaterial.update({
-                                            where: { id: pm.id },
-                                            data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                    const proj = updatedLog.projectId ? await index_1.prisma.project.findUnique({ where: { id: String(updatedLog.projectId) } }) : null;
+                                    if (updatedLog.projectId) {
+                                        const pm = await index_1.prisma.projectMaterial.findFirst({
+                                            where: { projectId: String(updatedLog.projectId), inventoryId: match.id, isConsumed: false }
                                         });
+                                        if (pm) {
+                                            const waste = Math.max(0, pm.quantity - qtyToDeduct);
+                                            await index_1.prisma.projectMaterial.update({
+                                                where: { id: pm.id },
+                                                data: { isConsumed: true, usedQuantity: qtyToDeduct, wasteQuantity: waste }
+                                            });
+                                        }
                                     }
+                                    await index_1.prisma.inventoryLog.create({
+                                        data: {
+                                            inventoryId: match.id,
+                                            type: 'OUT',
+                                            quantity: qtyToDeduct,
+                                            remarks: `Used in Project Approval: ${proj?.name || 'Unknown'}`
+                                        }
+                                    });
                                 }
-                                await index_1.prisma.inventoryLog.create({
-                                    data: {
-                                        inventoryId: match.id,
-                                        type: 'OUT',
-                                        quantity: qtyToDeduct,
-                                        remarks: `Used in Project Approval: ${proj?.name || 'Unknown'}`
-                                    }
-                                });
                             }
                         }
                     }
-                }
-                catch (invErr) {
-                    console.warn('Inventory deduction warning in non-split approval:', invErr);
+                    catch (invErr) {
+                        console.warn('Inventory deduction warning in non-split approval:', invErr);
+                    }
                 }
             }
         }

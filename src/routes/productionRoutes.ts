@@ -425,15 +425,45 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
 
     if (splits && splits.length > 0 && approvalStatus === 'approved') {
       const totalSplitQty = splits.reduce((acc: number, s: any) => acc + Number(s.qty || 0), 0);
-      const remainingQty = (Number(originalLog.quantityProduced) || 0) - totalSplitQty;
+      const rejectedPieces = req.body.rejectedPieces;
+      const rejectedQty = rejectedPieces && Number(rejectedPieces.qty) > 0 ? Number(rejectedPieces.qty) : 0;
+      const totalHandledQty = totalSplitQty + rejectedQty;
+      const remainingPendingQty = (Number(originalLog.quantityProduced) || 0) - totalHandledQty;
       
       const { id: _id, createdAt, updatedAt, ...restLogData } = originalLog;
 
-      if (remainingQty > 0) {
-        // Partial approval: Keep original log pending with remainder, create new logs for all splits
+      // Handle rejected portion if provided
+      if (rejectedQty > 0) {
+        try {
+          const rejectedStartPhotos = {
+            ...(typeof originalLog.startPhotos === 'object' && originalLog.startPhotos !== null ? originalLog.startPhotos : {}),
+            ...(rejectedPieces.rejectionPhoto ? { rejectionPhoto: rejectedPieces.rejectionPhoto } : {})
+          };
+
+          await prisma.productionLog.create({
+            data: {
+              ...restLogData,
+              approvalStatus: 'rejected_admin',
+              quantityProduced: rejectedQty,
+              remarks: rejectedPieces.remarks || remarks || 'Rejected by Admin during approval',
+              pieceIds: rejectedPieces.pieceIds && Array.isArray(rejectedPieces.pieceIds) ? rejectedPieces.pieceIds : [],
+              startPhotos: rejectedStartPhotos,
+              projectId: originalLog.projectId || (splits[0]?.projectId ? String(splits[0].projectId) : undefined),
+              productId: originalLog.productId || (splits[0]?.productId ? String(splits[0].productId) : undefined),
+              productName: rejectedPieces.productName || (originalLog.productName ? `${originalLog.productName.split(' - ')[0]} (${rejectedQty} Pcs)` : undefined),
+              slabId: originalLog.slabId || (splits[0]?.slabId ? String(splits[0].slabId) : undefined),
+            }
+          });
+        } catch (rejErr) {
+          console.warn('Could not create rejected production log during partial approval:', rejErr);
+        }
+      }
+
+      if (remainingPendingQty > 0) {
+        // Partial approval with pending remainder: Keep original log pending with remainder, create new logs for all splits
         updatedLog = await prisma.productionLog.update({
           where: { id: String(id) },
-          data: { quantityProduced: remainingQty } // stays pending
+          data: { quantityProduced: remainingPendingQty } // stays pending
         });
         
         for (const split of splits) {
@@ -496,13 +526,13 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
           }
         }
       } else {
-        // Full approval
+        // Full approval / all handled (splits + optional rejection)
         const firstSplit = splits[0];
         
         updatedLog = await prisma.productionLog.update({
           where: { id: String(id) },
           data: {
-            approvalStatus,
+            approvalStatus: 'approved',
             projectId: firstSplit.projectId ? String(firstSplit.projectId) : undefined,
             productId: firstSplit.productId ? String(firstSplit.productId) : undefined,
             productName: firstSplit.productName ? String(firstSplit.productName) : undefined,
@@ -681,6 +711,36 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
         }
       }
     } else {
+      // Rejection or direct approval without splits
+      const { id: _id, createdAt, updatedAt, ...restLogData } = originalLog;
+      const rejectedQty = Number(req.body.rejectedQty || originalLog.quantityProduced) || 0;
+      const rejPhoto = req.body.rejectionPhoto || req.body.startPhotos?.rejectionPhoto;
+      const mergedStartPhotos = {
+        ...(typeof originalLog.startPhotos === 'object' && originalLog.startPhotos !== null ? originalLog.startPhotos : {}),
+        ...(req.body.startPhotos || {}),
+        ...(rejPhoto ? { rejectionPhoto: rejPhoto } : {})
+      };
+
+      if (approvalStatus === 'rejected_admin' && rejectedQty < (Number(originalLog.quantityProduced) || 0) && rejectedQty > 0) {
+        // Partial rejection: split into rejected log and remaining pending log
+        const remainingQty = (Number(originalLog.quantityProduced) || 0) - rejectedQty;
+        await prisma.productionLog.update({
+          where: { id: String(id) },
+          data: { quantityProduced: remainingQty }
+        });
+
+        updatedLog = await prisma.productionLog.create({
+          data: {
+            ...restLogData,
+            approvalStatus: 'rejected_admin',
+            quantityProduced: rejectedQty,
+            remarks: remarks !== undefined ? String(remarks) : undefined,
+            startPhotos: mergedStartPhotos,
+            productName: req.body.productName || (originalLog.productName ? `${originalLog.productName.split(' - ')[0]} (${rejectedQty} Pcs)` : undefined),
+            ...(req.body.pieceIds && { pieceIds: req.body.pieceIds })
+          }
+        });
+      } else {
         updatedLog = await prisma.productionLog.update({
           where: { id: String(id) },
           data: {
@@ -688,7 +748,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
             projectId: projectId ? String(projectId) : undefined,
             remarks: remarks !== undefined ? String(remarks) : undefined,
             ...(req.body.machineId && { machineId: req.body.machineId }),
-            ...(req.body.startPhotos && { startPhotos: req.body.startPhotos })
+            startPhotos: mergedStartPhotos,
+            ...(req.body.pieceIds && { pieceIds: req.body.pieceIds })
           }
         });
 
@@ -742,6 +803,7 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
           }
         }
       }
+    }
 
     if (updatedLog && updatedLog.transactionType === 'IN' && updatedLog.parentLogId) {
       try {

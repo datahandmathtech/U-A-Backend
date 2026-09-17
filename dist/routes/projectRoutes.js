@@ -275,31 +275,63 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
+        // Find project by id (ObjectId) or projectId (string identifier)
+        const existingProject = await index_1.prisma.project.findFirst({
+            where: {
+                OR: [
+                    { id: String(id) },
+                    { projectId: String(id) }
+                ]
+            }
+        });
+        if (!existingProject) {
+            fastCache_1.fastCache.invalidate('all_projects');
+            fastCache_1.fastCache.invalidate('dashboard_summary');
+            fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+            fastCache_1.fastCache.invalidate('project_hierarchy_v3');
+            fastCache_1.fastCache.invalidate('all_names_v2');
+            return res.json({ message: 'Project deleted or does not exist' });
+        }
+        const realId = existingProject.id;
         // Find all slabs for this project to delete their pieces and pieceLogs
-        const slabs = await index_1.prisma.slab.findMany({ where: { projectId: String(id) }, select: { id: true } });
+        const slabs = await index_1.prisma.slab.findMany({ where: { projectId: realId }, select: { id: true } });
         const slabIds = slabs.map(s => s.id);
         const pieces = await index_1.prisma.piece.findMany({ where: { slabId: { in: slabIds } }, select: { id: true } });
         const pieceIds = pieces.map(p => p.id);
-        // Run deletions in a transaction to ensure everything is deleted or nothing is
-        await index_1.prisma.$transaction([
-            index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }),
-            index_1.prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }),
-            index_1.prisma.approvalRecord.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.shopDrawing.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.design.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.quotation.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.invoice.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.productionLog.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.projectMaterial.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.machineLog.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.laborContract.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.projectClosure.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.dispatch.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.qA_QC.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.crate.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.slab.deleteMany({ where: { projectId: String(id) } }),
-            index_1.prisma.project.delete({ where: { id: String(id) } })
-        ]);
+        // Delete child dependencies safely
+        if (pieceIds.length > 0) {
+            await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }).catch(e => console.error("pieceLog del error:", e));
+        }
+        if (slabIds.length > 0) {
+            await index_1.prisma.piece.deleteMany({ where: { slabId: { in: slabIds } } }).catch(e => console.error("piece del error:", e));
+            await index_1.prisma.slab.deleteMany({ where: { id: { in: slabIds } } }).catch(e => console.error("slab del error:", e));
+        }
+        await index_1.prisma.approvalRecord.deleteMany({ where: { projectId: realId } }).catch(e => console.error("approvalRecord del error:", e));
+        await index_1.prisma.shopDrawing.deleteMany({ where: { projectId: realId } }).catch(e => console.error("shopDrawing del error:", e));
+        await index_1.prisma.design.deleteMany({ where: { projectId: realId } }).catch(e => console.error("design del error:", e));
+        await index_1.prisma.quotation.deleteMany({ where: { projectId: realId } }).catch(e => console.error("quotation del error:", e));
+        await index_1.prisma.invoice.deleteMany({ where: { projectId: realId } }).catch(e => console.error("invoice del error:", e));
+        await index_1.prisma.productionLog.deleteMany({ where: { projectId: realId } }).catch(e => console.error("productionLog del error:", e));
+        await index_1.prisma.projectMaterial.deleteMany({ where: { projectId: realId } }).catch(e => console.error("projectMaterial del error:", e));
+        await index_1.prisma.machineLog.deleteMany({ where: { projectId: realId } }).catch(e => console.error("machineLog del error:", e));
+        await index_1.prisma.laborContract.deleteMany({ where: { projectId: realId } }).catch(e => console.error("laborContract del error:", e));
+        await index_1.prisma.projectClosure.deleteMany({ where: { projectId: realId } }).catch(e => console.error("projectClosure del error:", e));
+        await index_1.prisma.crate.deleteMany({ where: { projectId: realId } }).catch(e => console.error("crate del error:", e));
+        await index_1.prisma.dispatch.deleteMany({ where: { projectId: realId } }).catch(e => console.error("dispatch del error:", e));
+        await index_1.prisma.qA_QC.deleteMany({ where: { projectId: realId } }).catch(e => console.error("qA_QC del error:", e));
+        await index_1.prisma.project.deleteMany({
+            where: {
+                OR: [
+                    { id: realId },
+                    { projectId: String(id) }
+                ]
+            }
+        });
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('dashboard_summary');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
+        fastCache_1.fastCache.invalidate('all_names_v2');
         res.json({ message: 'Project and all related entries deleted successfully' });
     }
     catch (error) {

@@ -262,7 +262,6 @@ router.get('/logs/:supplier', authenticate, async (req, res) => {
   }
 });
 
-
 // Manual deduct stock (and optional waste)
 router.post('/deduct', authenticate, async (req, res) => {
   try {
@@ -336,13 +335,9 @@ router.post('/deduct', authenticate, async (req, res) => {
             if (unit === 'feet') {
               usedSizeStr = `${l}ft x ${w}ft${t}`;
             } else if (unit === 'mm') {
-              const lFt = (l / 304.8).toFixed(2);
-              const wFt = (w / 304.8).toFixed(2);
-              usedSizeStr = `${l}mm x ${w}mm (${lFt}ft x ${wFt}ft)${t}`;
+              usedSizeStr = `${l}mm x ${w}mm${t}`;
             } else {
-              const lFt = (l / 12).toFixed(2);
-              const wFt = (w / 12).toFixed(2);
-              usedSizeStr = `${l}" x ${w}" (${lFt}ft x ${wFt}ft)${t}`;
+              usedSizeStr = `${l}" x ${w}"${t}`;
             }
           }
 
@@ -369,6 +364,9 @@ router.post('/deduct', authenticate, async (req, res) => {
     // Clean project and piece name remarks only without duplicating brackets
     let cleanProjName = (projectName || '').replace(/\s*\(\d+(?:\.\d+)?\s*L?\s*[xX]\s*\d+(?:\.\d+)?\s*W?[^)]*\)/gi, '').trim();
     let outRemarks = cleanProjName ? `${cleanProjName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
+    if (pieceId) {
+      outRemarks = `[Piece:${pieceId}] ${outRemarks}`;
+    }
     if (length && width) {
       const l = Number(length) || 0;
       const w = Number(width) || 0;
@@ -376,13 +374,9 @@ router.post('/deduct', authenticate, async (req, res) => {
       if (unit === 'feet') {
         outRemarks += ` (${l}ft x ${w}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
       } else if (unit === 'mm') {
-        const lFt = (l / 304.8).toFixed(2);
-        const wFt = (w / 304.8).toFixed(2);
-        outRemarks += ` (${l}mm x ${w}mm | ${lFt}ft x ${wFt}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
+        outRemarks += ` (${l}mm x ${w}mm${t} | ${used.toFixed(2)} Sq.Ft)`;
       } else {
-        const lFt = (l / 12).toFixed(2);
-        const wFt = (w / 12).toFixed(2);
-        outRemarks += ` (${l}" x ${w}" | ${lFt}ft x ${wFt}ft${t} | ${used.toFixed(2)} Sq.Ft)`;
+        outRemarks += ` (${l}" x ${w}"${t} | ${used.toFixed(2)} Sq.Ft)`;
       }
     }
 
@@ -419,7 +413,6 @@ router.post('/deduct', authenticate, async (req, res) => {
     res.status(500).json({ message: 'Server error deducting stock' });
   }
 });
-
 
 // Edit log
 router.put('/logs/:id', authenticate, async (req, res) => {
@@ -491,25 +484,60 @@ router.delete('/logs/:id', authenticate, async (req, res) => {
           data: { quantity: inventory.quantity + log.quantity }
         });
 
-        // If log was for a piece, unlink piece sourceMaterialId
+        // 1. Unlink piece if log remarks contained piece info
         if (log.remarks) {
-          const match = log.remarks.match(/Piece:\s*([^)]+)/);
-          const pieceName = match && match[1] ? match[1].trim() : '';
-          if (pieceName) {
-            const p = await prisma.piece.findFirst({
-              where: {
-                OR: [
-                  { productName: pieceName },
-                  { productName: { contains: pieceName } }
-                ]
+          const idMatch = log.remarks.match(/\[Piece:([a-f\d]{24})\]/i);
+          const taggedPieceId = (idMatch && idMatch[1]) ? idMatch[1].trim() : '';
+
+          if (taggedPieceId) {
+            await prisma.piece.update({
+              where: { id: taggedPieceId },
+              data: { sourceMaterialId: null, vendorName: null }
+            }).catch(() => {});
+          }
+
+          // Also check for piece name in brackets, e.g. "Hayden Testing (HIPL 4.1)"
+          const bracketMatches = Array.from(log.remarks.matchAll(/\(([^)]+)\)/g));
+          for (const m of bracketMatches) {
+            const inside = (m && m[1]) ? m[1].trim() : '';
+            if (inside && !inside.includes('Sq.Ft') && !inside.includes('ft') && !inside.includes('mm') && !inside.includes('"')) {
+              const p = await prisma.piece.findFirst({
+                where: {
+                  OR: [
+                    { productName: inside },
+                    { productName: { contains: inside } }
+                  ]
+                }
+              });
+              if (p) {
+                await prisma.piece.update({
+                  where: { id: p.id },
+                  data: { sourceMaterialId: null, vendorName: null }
+                }).catch(() => {});
               }
-            });
-            if (p) {
-              await prisma.piece.update({
-                where: { id: p.id },
-                data: { sourceMaterialId: null, vendorName: null }
-              }).catch(() => {});
             }
+          }
+        }
+
+        // 2. Decrement ProjectMaterial quantity and usedQuantity for this inventory item
+        const projMats = await prisma.projectMaterial.findMany({
+          where: { inventoryId: log.inventoryId }
+        });
+        for (const pm of projMats) {
+          const newUsed = Math.max(0, (pm.usedQuantity || 0) - log.quantity);
+          const newQty = Math.max(0, (pm.quantity || 0) - log.quantity);
+          if (newQty <= 0) {
+            // Unlink all pieces pointing to this exhausted projectMaterial
+            await prisma.piece.updateMany({
+              where: { sourceMaterialId: pm.id },
+              data: { sourceMaterialId: null, vendorName: null }
+            });
+            await prisma.projectMaterial.delete({ where: { id: pm.id } }).catch(() => {});
+          } else {
+            await prisma.projectMaterial.update({
+              where: { id: pm.id },
+              data: { usedQuantity: newUsed, quantity: newQty }
+            });
           }
         }
       } else if (log.type === 'IN') {
