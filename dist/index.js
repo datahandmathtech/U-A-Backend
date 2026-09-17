@@ -14,6 +14,10 @@ const client_1 = require("@prisma/client");
 dotenv_1.default.config();
 const standardUri = 'mongodb+srv://yatree_admin:Mayank123@unnati-arts.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
 let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
+// If env var has the broken seedlist shard URI, cluster0, or non-SRV URI, force official SRV URI
+if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('cluster0.') || !effectiveDbUrl.startsWith('mongodb+srv://')) {
+    effectiveDbUrl = standardUri;
+}
 process.env.DATABASE_URL = effectiveDbUrl;
 process.env.MONGO_URI = effectiveDbUrl;
 const app = (0, express_1.default)();
@@ -140,7 +144,7 @@ app.get(['/api/ping', '/ping'], (req, res) => {
     const maskedUrl = (effectiveDbUrl || '').replace(/:([^:@]+)@/, ':****@');
     res.json({
         status: 'ok',
-        version: 'v2.5-srv-optimized',
+        version: 'v2.6-pure-srv',
         time: new Date().toISOString(),
         port,
         dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing',
