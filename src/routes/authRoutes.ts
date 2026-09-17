@@ -126,30 +126,40 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
     // Fast indexed path: Exact match on unique indexed fields (email, staffId, name)
     const capitalizedInput = cleanInput.length > 0 ? (cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1).toLowerCase()) : cleanInput;
     
-    let user: any = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: cleanInput },
-          { staffId: cleanInput },
-          { email: cleanInput.toLowerCase() },
-          { name: cleanInput },
-          { name: cleanInput.toLowerCase() },
-          { name: capitalizedInput }
-        ]
-      }
-    });
+    let user: any = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        user = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { email: cleanInput },
+              { staffId: cleanInput },
+              { email: cleanInput.toLowerCase() },
+              { name: cleanInput },
+              { name: cleanInput.toLowerCase() },
+              { name: capitalizedInput }
+            ]
+          }
+        });
 
-    // Fallback path: Case-insensitive search if exact lookup returned null
-    if (!user) {
-      user = await prisma.user.findFirst({
-        where: {
-          OR: [
-            { email: { equals: cleanInput, mode: 'insensitive' } },
-            { staffId: { equals: cleanInput, mode: 'insensitive' } },
-            { name: { equals: cleanInput, mode: 'insensitive' } }
-          ]
+        // Fallback path: Case-insensitive search if exact lookup returned null
+        if (!user) {
+          user = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { email: { equals: cleanInput, mode: 'insensitive' } },
+                { staffId: { equals: cleanInput, mode: 'insensitive' } },
+                { name: { equals: cleanInput, mode: 'insensitive' } }
+              ]
+            }
+          });
         }
-      });
+        break;
+      } catch (dbErr: any) {
+        console.warn(`User lookup attempt ${attempt} failed:`, dbErr?.message || dbErr);
+        if (attempt === 3) throw dbErr;
+        await new Promise(res => setTimeout(res, 500 * attempt));
+      }
     }
     
     console.log('User found:', user ? user.email : 'None');
