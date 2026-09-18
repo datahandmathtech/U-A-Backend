@@ -248,6 +248,55 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         res.status(500).json({ message: 'Server error fetching slabs' });
     }
 });
+// Bulk create slabs (Master Maker)
+router.post('/bulk-create', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { projectId, slabs } = req.body;
+        if (!projectId || !Array.isArray(slabs) || slabs.length === 0) {
+            return res.status(400).json({ message: 'projectId and slabs array are required' });
+        }
+        const createdSlabs = [];
+        for (const item of slabs) {
+            const slabName = item.name || 'Slab';
+            const slabSize = item.size || null;
+            const reqStages = item.requiredStages && Array.isArray(item.requiredStages) && item.requiredStages.length > 0
+                ? item.requiredStages
+                : ['Production', 'Polishing', 'Packing', 'Dispatch'];
+            const created = await index_1.prisma.slab.create({
+                data: {
+                    projectId: String(projectId),
+                    name: slabName,
+                    size: slabSize,
+                    cost: Number(item.cost) || 0,
+                    requiredStages: reqStages,
+                    pieces: {
+                        create: [
+                            {
+                                pieceNumber: 1,
+                                productName: slabName,
+                                size: slabSize,
+                                stage: 'Production',
+                                status: 'pending'
+                            }
+                        ]
+                    }
+                },
+                include: {
+                    pieces: true
+                }
+            });
+            createdSlabs.push(created);
+        }
+        // Invalidate caches
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        res.status(201).json({ message: `Successfully created ${createdSlabs.length} slabs`, count: createdSlabs.length, slabs: createdSlabs });
+    }
+    catch (error) {
+        console.error('Error in bulk-create slabs:', error);
+        res.status(500).json({ message: 'Server error creating bulk slabs', error: error?.message || error });
+    }
+});
 // Create a new slab
 router.post('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
