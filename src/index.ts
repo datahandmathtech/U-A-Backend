@@ -8,12 +8,12 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-const standardUri = 'mongodb+srv://yatree_admin:Mayank123@unnati-arts.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority';
-let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
+const directSeedlistUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&authSource=admin&replicaSet=atlas-icn4hi-shard-0&retryWrites=true&w=majority';
+let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || directSeedlistUri;
 
-// If env var has the broken seedlist shard URI, cluster0, or non-SRV URI, force official SRV URI
-if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('cluster0.') || !effectiveDbUrl.startsWith('mongodb+srv://') || effectiveDbUrl.includes('maxPoolSize')) {
-  effectiveDbUrl = standardUri;
+// If env var is missing, uses old SRV format, or contains pool overrides, use direct seedlist URI for instant DNS bypass on Hostinger
+if (!effectiveDbUrl || effectiveDbUrl.startsWith('mongodb+srv://') || effectiveDbUrl.includes('cluster0.') || effectiveDbUrl.includes('maxPoolSize')) {
+  effectiveDbUrl = directSeedlistUri;
 }
 
 process.env.DATABASE_URL = effectiveDbUrl;
