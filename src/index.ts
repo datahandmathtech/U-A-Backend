@@ -21,18 +21,19 @@ process.env.MONGO_URI = effectiveDbUrl;
 
 const app = express();
 const port = process.env.PORT || 5000;
-export const prisma = new PrismaClient({
-  datasources: {
-    db: {
-      url: effectiveDbUrl
-    }
-  }
-});
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
-// Eagerly connect to MongoDB to eliminate cold start delays
-prisma.$connect()
-  .then(() => console.log('✅ MongoDB connected successfully via Prisma'))
-  .catch((err: any) => console.error('❌ MongoDB initial connection warning:', err?.message || err));
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    datasources: {
+      db: {
+        url: effectiveDbUrl
+      }
+    }
+  });
+
+globalForPrisma.prisma = prisma;
 
 // Middleware
 app.use(compression());
@@ -187,7 +188,7 @@ app.get('/api/debug-mongo', async (req, res) => {
     const startP = Date.now();
     const count = await Promise.race([
       prisma.user.count(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma count timeout after 4000ms')), 4000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma count timeout after 12000ms')), 12000))
     ]);
     results.prismaTimeMs = Date.now() - startP;
     results.prismaUserCount = count;
