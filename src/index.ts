@@ -248,10 +248,8 @@ const staticOptions = {
   }
 };
 
-// Serve static files from multiple potential directories
+// Serve static files from public directory
 app.use(express.static(path.join(__dirname, '../public'), staticOptions));
-app.use(express.static(path.join(__dirname, '../public_html'), staticOptions));
-app.use(express.static(path.join(__dirname, '..'), { maxAge: '1h' }));
 
 // Catch-all route
 app.use((req, res) => {
@@ -259,20 +257,16 @@ app.use((req, res) => {
     res.status(404).json({ error: 'API endpoint not found: ' + req.path });
   } else {
     const publicIndexPath = path.join(__dirname, '../public/index.html');
-    const publicHtmlIndexPath = path.join(__dirname, '../public_html/index.html');
     const rootIndexPath = path.join(__dirname, '../index.html');
 
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
     if (fs.existsSync(publicIndexPath)) {
       res.sendFile(publicIndexPath);
-    } else if (fs.existsSync(publicHtmlIndexPath)) {
-      res.sendFile(publicHtmlIndexPath);
     } else if (fs.existsSync(rootIndexPath)) {
       res.sendFile(rootIndexPath);
     } else {
       res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
-    }
   }
 });
 

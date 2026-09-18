@@ -230,10 +230,8 @@ const staticOptions = {
         }
     }
 };
-// Serve static files from multiple potential directories
+// Serve static files from public directory
 app.use(express_1.default.static(path_1.default.join(__dirname, '../public'), staticOptions));
-app.use(express_1.default.static(path_1.default.join(__dirname, '../public_html'), staticOptions));
-app.use(express_1.default.static(path_1.default.join(__dirname, '..'), { maxAge: '1h' }));
 // Catch-all route
 app.use((req, res) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/auth') || req.headers.accept?.includes('application/json')) {
@@ -241,14 +239,10 @@ app.use((req, res) => {
     }
     else {
         const publicIndexPath = path_1.default.join(__dirname, '../public/index.html');
-        const publicHtmlIndexPath = path_1.default.join(__dirname, '../public_html/index.html');
         const rootIndexPath = path_1.default.join(__dirname, '../index.html');
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         if (fs_1.default.existsSync(publicIndexPath)) {
             res.sendFile(publicIndexPath);
-        }
-        else if (fs_1.default.existsSync(publicHtmlIndexPath)) {
-            res.sendFile(publicHtmlIndexPath);
         }
         else if (fs_1.default.existsSync(rootIndexPath)) {
             res.sendFile(rootIndexPath);
