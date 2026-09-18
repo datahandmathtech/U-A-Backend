@@ -12,13 +12,8 @@ const standardUri = 'mongodb+srv://yatree_admin:Mayank123@unnati-arts.iuq9w0n.mo
 let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
 
 // If env var has the broken seedlist shard URI, cluster0, or non-SRV URI, force official SRV URI
-if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('cluster0.') || !effectiveDbUrl.startsWith('mongodb+srv://')) {
+if (effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('cluster0.') || !effectiveDbUrl.startsWith('mongodb+srv://') || effectiveDbUrl.includes('maxPoolSize')) {
   effectiveDbUrl = standardUri;
-}
-
-if (!effectiveDbUrl.includes('maxPoolSize')) {
-  const separator = effectiveDbUrl.includes('?') ? '&' : '?';
-  effectiveDbUrl = `${effectiveDbUrl}${separator}maxPoolSize=25&minPoolSize=5&connectTimeoutMS=10000&socketTimeoutMS=45000&serverSelectionTimeoutMS=10000`;
 }
 
 process.env.DATABASE_URL = effectiveDbUrl;
