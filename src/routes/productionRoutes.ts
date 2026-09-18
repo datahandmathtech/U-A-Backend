@@ -922,23 +922,43 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
         });
 
         // Create approved production log for audit and In/Out tracking
-        const log = await prisma.productionLog.create({
-          data: {
-            projectId: targetProjectId ? String(targetProjectId) : undefined,
-            slabId: targetSlab ? targetSlab.id : (sId !== 'default' ? sId : undefined),
-            productId: targetSlab?.id,
-            productName: targetSlab ? `${targetSlab.name} - ${pieceNames}` : pieceNames,
-            pieceIds: groupPieceIds,
-            quantityProduced: groupPieces.length,
-            stage: stg.includes('Work') ? stg : `${stg} Work`,
-            transactionType: 'IN',
-            approvalStatus: 'approved',
-            remarks: remarks || `Manual Direct Approval for ${stg}: ${groupPieces.length} pieces (${pieceNames})`,
-            workerName: req.user?.name || 'Admin',
-            workerId: req.user?.id
+        try {
+          const log = await prisma.productionLog.create({
+            data: {
+              projectId: targetProjectId ? String(targetProjectId) : undefined,
+              slabId: targetSlab ? targetSlab.id : (sId !== 'default' ? sId : undefined),
+              productId: targetSlab?.id,
+              productName: targetSlab ? `${targetSlab.name} - ${pieceNames}` : pieceNames,
+              pieceIds: groupPieceIds,
+              quantityProduced: groupPieces.length,
+              stage: stg.includes('Work') ? stg : `${stg} Work`,
+              transactionType: 'IN',
+              approvalStatus: 'approved',
+              remarks: remarks || `Manual Direct Approval for ${stg}: ${groupPieces.length} pieces (${pieceNames})`,
+              workerId: req.user?.id ? String(req.user.id) : undefined
+            }
+          });
+          createdLogs.push(log);
+        } catch (logErr) {
+          console.warn('Could not create ProductionLog record during manual approval:', logErr);
+        }
+
+        // Also create PieceLog entries in a single fast bulk insert
+        try {
+          const pieceLogsData = groupPieces.map(p => ({
+            pieceId: p.id,
+            stage: stg,
+            status: 'approved',
+            operatorId: req.user?.id ? String(req.user.id) : undefined,
+            remarks: 'Manual Direct Approval',
+            endTime: new Date()
+          }));
+          if (pieceLogsData.length > 0) {
+            await prisma.pieceLog.createMany({ data: pieceLogsData });
           }
-        });
-        createdLogs.push(log);
+        } catch (plErr) {
+          console.warn('PieceLog createMany warning:', plErr);
+        }
       }
     }
 
@@ -1028,8 +1048,6 @@ router.put('/:id', authenticate, async (req, res) => {
       vendorId: vendorId !== undefined ? String(vendorId) : undefined,
       vendorName: vendorName !== undefined ? String(vendorName) : undefined,
       workerId: workerId !== undefined ? String(workerId) : undefined,
-      workerName: workerName !== undefined ? String(workerName) : undefined,
-      photoUrl: photoUrl !== undefined ? String(photoUrl) : undefined,
     };
 
     if (date) {

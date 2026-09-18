@@ -285,6 +285,27 @@ router.post('/bulk-create', authenticate, async (req, res) => {
         ? item.requiredStages
         : ['Production', 'Polishing', 'Packing', 'Dispatch'];
 
+      let piecesToCreate: any[] = [];
+      if (item.pieces && Array.isArray(item.pieces) && item.pieces.length > 0) {
+        piecesToCreate = item.pieces.map((p: any, pIdx: number) => ({
+          pieceNumber: p.pieceNumber ? Number(p.pieceNumber) : (pIdx + 1),
+          productName: p.productName || p.name || slabName,
+          size: p.size || slabSize,
+          stage: p.stage || 'Production',
+          status: 'pending'
+        }));
+      } else {
+        piecesToCreate = [
+          {
+            pieceNumber: 1,
+            productName: slabName,
+            size: slabSize,
+            stage: 'Production',
+            status: 'pending'
+          }
+        ];
+      }
+
       const created = await prisma.slab.create({
         data: {
           projectId: String(projectId),
@@ -293,15 +314,7 @@ router.post('/bulk-create', authenticate, async (req, res) => {
           cost: Number(item.cost) || 0,
           requiredStages: reqStages,
           pieces: {
-            create: [
-              {
-                pieceNumber: 1,
-                productName: slabName,
-                size: slabSize,
-                stage: 'Production',
-                status: 'pending'
-              }
-            ]
+            create: piecesToCreate
           }
         },
         include: {
