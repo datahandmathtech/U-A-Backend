@@ -267,6 +267,7 @@ app.use((req, res) => {
       res.sendFile(rootIndexPath);
     } else {
       res.status(404).send('Not Found: Frontend files are missing. Please copy the frontend build to the backend/public folder.');
+    }
   }
 });
 
