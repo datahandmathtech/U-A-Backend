@@ -905,6 +905,7 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
             }
         }
         // Invalidate caches
+        fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.json({

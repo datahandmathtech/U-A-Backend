@@ -15,7 +15,26 @@ router.get('/', authenticate, async (req, res) => {
       orderBy: { createdAt: 'desc' },
       include: { 
         assignedTo: { select: { name: true } },
-        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 }
+        quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+        slabs: {
+          select: {
+            id: true,
+            name: true,
+            size: true,
+            status: true,
+            requiredStages: true,
+            pieces: {
+              select: {
+                id: true,
+                pieceNumber: true,
+                productName: true,
+                size: true,
+                stage: true,
+                status: true
+              }
+            }
+          }
+        }
       }
     });
 
@@ -37,6 +56,7 @@ router.get('/', authenticate, async (req, res) => {
       return {
         ...projectData,
         products: p.quotations?.[0]?.products || [],
+        slabs: p.slabs || [],
         totalPieces: calculatedTotalPieces,
         completedPieces: projectData.completedPieces || 0,
         deliveryDate: projectData.deadline || projectData.deliveryDate,

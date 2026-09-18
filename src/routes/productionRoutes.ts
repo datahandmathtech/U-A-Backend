@@ -963,6 +963,7 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
     }
 
     // Invalidate caches
+    fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
 

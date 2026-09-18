@@ -254,44 +254,37 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
     const slabs = await prisma.slab.findMany({
       where: { projectId: String(projectId) },
       orderBy: { createdAt: 'asc' },
-      include: {
+      select: {
+        id: true,
+        projectId: true,
+        name: true,
+        size: true,
+        cost: true,
+        status: true,
+        requiredStages: true,
+        createdAt: true,
         pieces: {
-          include: { 
+          select: {
+            id: true,
+            pieceNumber: true,
+            productName: true,
+            size: true,
+            stage: true,
+            status: true,
             logs: {
               select: {
                 id: true,
                 stage: true,
-                status: true,
-                createdAt: true,
-                startTime: true,
-                endTime: true
-              }
-            },
-            sourceMaterial: {
-              select: {
-                id: true,
-                quantity: true,
-                usedQuantity: true,
-                inventory: {
-                  select: {
-                    id: true,
-                    itemName: true,
-                    length: true,
-                    width: true,
-                    thickness: true,
-                    blockNumber: true
-                  }
-                }
+                status: true
               }
             }
           },
           orderBy: { pieceNumber: 'asc' }
-        },
-        inventory: true
+        }
       }
     });
 
-    fastCache.set(cacheKey, slabs, 30);
+    fastCache.set(cacheKey, slabs, 60);
     res.json(slabs);
   } catch (error) {
     console.error('Error fetching slabs for project:', error);
@@ -319,21 +312,11 @@ router.post('/bulk-create', authenticate, async (req, res) => {
       if (item.pieces && Array.isArray(item.pieces) && item.pieces.length > 0) {
         piecesToCreate = item.pieces.map((p: any, pIdx: number) => ({
           pieceNumber: p.pieceNumber ? Number(p.pieceNumber) : (pIdx + 1),
-          productName: p.productName || p.name || slabName,
+          productName: p.productName || p.name || `${slabName}.${pIdx + 1}`,
           size: p.size || slabSize,
           stage: p.stage || 'Production',
           status: 'pending'
         }));
-      } else {
-        piecesToCreate = [
-          {
-            pieceNumber: 1,
-            productName: slabName,
-            size: slabSize,
-            stage: 'Production',
-            status: 'pending'
-          }
-        ];
       }
 
       const created = await prisma.slab.create({
@@ -343,9 +326,11 @@ router.post('/bulk-create', authenticate, async (req, res) => {
           size: slabSize,
           cost: Number(item.cost) || 0,
           requiredStages: reqStages,
-          pieces: {
-            create: piecesToCreate
-          }
+          ...(piecesToCreate.length > 0 ? {
+            pieces: {
+              create: piecesToCreate
+            }
+          } : {})
         },
         include: {
           pieces: true
@@ -363,6 +348,131 @@ router.post('/bulk-create', authenticate, async (req, res) => {
   } catch (error: any) {
     console.error('Error in bulk-create slabs:', error);
     res.status(500).json({ message: 'Server error creating bulk slabs', error: error?.message || error });
+  }
+});
+
+// Replicate a source slab template (its pieces, sizes, requiredStages) across target existing slabs or a range
+router.post('/replicate-template', authenticate, async (req, res) => {
+  try {
+    const { projectId, sourceSlabId, targetSlabIds, fromSlabNumber, toSlabNumber } = req.body;
+
+    if (!projectId || !sourceSlabId) {
+      return res.status(400).json({ message: 'projectId and sourceSlabId are required' });
+    }
+
+    // 1. Fetch source slab with its pieces
+    const sourceSlab = await prisma.slab.findUnique({
+      where: { id: String(sourceSlabId) },
+      include: {
+        pieces: {
+          orderBy: { pieceNumber: 'asc' }
+        }
+      }
+    });
+
+    if (!sourceSlab) {
+      return res.status(404).json({ message: 'Source slab not found' });
+    }
+
+    const templatePieces = sourceSlab.pieces || [];
+
+    // 2. Determine target slabs
+    let targetSlabs: any[] = [];
+
+    if (Array.isArray(targetSlabIds) && targetSlabIds.length > 0) {
+      targetSlabs = await prisma.slab.findMany({
+        where: {
+          id: { in: targetSlabIds.map(String) },
+          projectId: String(projectId)
+        },
+        include: { pieces: true }
+      });
+    } else if (fromSlabNumber !== undefined && toSlabNumber !== undefined) {
+      const allProjectSlabs = await prisma.slab.findMany({
+        where: { projectId: String(projectId) },
+        orderBy: { createdAt: 'asc' },
+        include: { pieces: true }
+      });
+
+      const start = Number(fromSlabNumber);
+      const end = Number(toSlabNumber);
+
+      targetSlabs = allProjectSlabs.filter((s, idx) => {
+        const match = s.name.match(/\d+$/);
+        const slabNum = match ? parseInt(match[0], 10) : (idx + 1);
+        return slabNum >= start && slabNum <= end;
+      });
+    }
+
+    if (targetSlabs.length === 0) {
+      return res.status(400).json({ message: 'No target slabs found matching the criteria' });
+    }
+
+    // 3. For each target slab, clone the template pieces and update slab specs
+    const updatedSlabIds = [];
+
+    for (const targetSlab of targetSlabs) {
+      if (targetSlab.id === sourceSlab.id) continue;
+
+      // Update target slab specs (size, requiredStages, cost, status)
+      await prisma.slab.update({
+        where: { id: targetSlab.id },
+        data: {
+          size: sourceSlab.size,
+          requiredStages: sourceSlab.requiredStages,
+          cost: sourceSlab.cost,
+          status: 'pending'
+        }
+      });
+
+      // Delete existing pieces and piece logs for this target slab
+      const oldPieceIds = (targetSlab.pieces || []).map((p: any) => p.id);
+      if (oldPieceIds.length > 0) {
+        await prisma.pieceLog.deleteMany({
+          where: { pieceId: { in: oldPieceIds } }
+        }).catch(e => console.error(e));
+
+        await prisma.piece.deleteMany({
+          where: { slabId: targetSlab.id }
+        }).catch(e => console.error(e));
+      }
+
+      // Clone pieces with target slab naming
+      if (templatePieces.length > 0) {
+        const piecesToInsert = templatePieces.map((tp, pIdx) => {
+          const pNum = tp.pieceNumber ? Number(tp.pieceNumber) : (pIdx + 1);
+          const subName = `${targetSlab.name}.${pNum}`;
+
+          return {
+            slabId: targetSlab.id,
+            pieceNumber: pNum,
+            productName: subName,
+            size: tp.size || sourceSlab.size || targetSlab.size,
+            stage: 'Production',
+            status: 'pending'
+          };
+        });
+
+        await prisma.piece.createMany({ data: piecesToInsert });
+      }
+
+      updatedSlabIds.push(targetSlab.id);
+    }
+
+    // 4. Invalidate caches
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
+
+    res.json({
+      success: true,
+      message: `Successfully replicated ${templatePieces.length} pieces and specs to ${updatedSlabIds.length} slab(s)`,
+      count: updatedSlabIds.length,
+      updatedSlabIds
+    });
+  } catch (error: any) {
+    console.error('Error replicating template to slabs:', error);
+    res.status(500).json({ message: 'Server error replicating template', error: error?.message || error });
   }
 });
 
@@ -472,6 +582,7 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
           vendorName: vendorName || null,
           size: piecesArray[i].size || size || null,
           stage: 'Production',
+          status: 'pending',
           sourceMaterialId: projectMaterial ? String(projectMaterial.id) : undefined
         });
       }
@@ -484,6 +595,7 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
           vendorName: vendorName || null,
           size: size || null,
           stage: 'Production',
+          status: 'pending',
           sourceMaterialId: projectMaterial ? String(projectMaterial.id) : undefined
         });
       }
@@ -503,8 +615,11 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
          });
     }
 
+    fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('project_hierarchy_v3');
+    fastCache.invalidate('all_names_v2');
 
     const newPieces = await prisma.piece.findMany({ 
       where: { slabId: String(id), pieceNumber: { gt: currentMaxPieceNumber } } 
@@ -573,7 +688,9 @@ router.patch('/bulk-stages', authenticate, async (req, res) => {
       data: { requiredStages: cleanStages }
     });
 
+    fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
     res.json({ message: `Updated stages for ${slabIds.length} slabs`, count: slabIds.length });
   } catch (error: any) {
     console.error('Error bulk updating slab stages:', error);
@@ -604,6 +721,8 @@ router.delete('/:id', authenticate, async (req, res) => {
       where: { id: String(id) }
     }).catch(e => console.error(e));
 
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
     fastCache.invalidate('project_hierarchy_v3');
     fastCache.invalidate('all_names_v2');
@@ -623,6 +742,11 @@ router.put('/piece/:id', authenticate, async (req, res) => {
       where: { id: String(req.params.id) },
       data: { vendorName, vendorId, size, status, productName, stage }
     });
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('project_hierarchy_v3');
+    fastCache.invalidate('all_names_v2');
     res.json(updatedPiece);
   } catch (error) {
     res.status(500).json({ message: 'Server error updating piece' });
@@ -644,6 +768,8 @@ router.delete('/piece/:id', authenticate, async (req, res) => {
       where: { id: String(id) }
     }).catch(e => console.error(e));
 
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
     fastCache.invalidate('project_hierarchy_v3');
     fastCache.invalidate('all_names_v2');
@@ -681,6 +807,12 @@ router.post('/piece/:id/log', authenticate, async (req: any, res: any) => {
            where: { id: req.params.id },
            data: { status: 'completed' }
          });
+
+         fastCache.invalidate('slabs_project_');
+         fastCache.invalidate('all_projects');
+         fastCache.invalidate('project_hierarchy_v2');
+         fastCache.invalidate('project_hierarchy_v3');
+         fastCache.invalidate('all_names_v2');
          
          return res.json(updatedLog);
        }
@@ -704,6 +836,12 @@ router.post('/piece/:id/log', authenticate, async (req: any, res: any) => {
       where: { id: req.params.id },
       data: { stage, status: status === 'active' ? 'active' : 'pending' }
     });
+
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('project_hierarchy_v3');
+    fastCache.invalidate('all_names_v2');
     
     res.status(201).json(newLog);
   } catch (error) {
