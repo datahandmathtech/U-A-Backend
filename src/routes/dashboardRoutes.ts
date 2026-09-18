@@ -41,27 +41,25 @@ router.get('/summary', authenticate, async (req, res) => {
       expenseFilter = { date: dateFilter.createdAt };
     }
 
-    const [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-      prisma.project.findMany({
-        where: dateFilter,
-        select: { status: true }
-      }),
-      prisma.invoice.findMany({
-        where: dateFilter,
-        select: { totalAmount: true, advancePaid: true, balanceAmount: true }
-      }),
-      prisma.laborContract.findMany({
-        where: dateFilter,
-        select: { totalAmount: true }
-      }),
-      prisma.expense.findMany({
-        where: expenseFilter,
-        select: { amount: true }
-      }),
-      prisma.electricityLog.findMany({
-        select: { month: true, totalBill: true }
-      })
-    ]);
+    const projects = await prisma.project.findMany({
+      where: dateFilter,
+      select: { status: true }
+    });
+    const invoices = await prisma.invoice.findMany({
+      where: dateFilter,
+      select: { totalAmount: true, advancePaid: true, balanceAmount: true }
+    });
+    const laborContracts = await prisma.laborContract.findMany({
+      where: dateFilter,
+      select: { totalAmount: true }
+    });
+    const expenses = await prisma.expense.findMany({
+      where: expenseFilter,
+      select: { amount: true }
+    });
+    const electricity = await prisma.electricityLog.findMany({
+      select: { month: true, totalBill: true }
+    });
 
     let totalLeads = 0;
     let activeProjects = 0;
@@ -113,7 +111,7 @@ router.get('/summary', authenticate, async (req, res) => {
       }
     };
 
-    fastCache.set(cacheKey, summaryData, 120);
+    fastCache.set(cacheKey, summaryData, 300);
     res.json(summaryData);
   } catch (error: any) {
     console.error('Dashboard summary error:', error);

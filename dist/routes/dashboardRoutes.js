@@ -39,27 +39,25 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         if (dateFilter.createdAt) {
             expenseFilter = { date: dateFilter.createdAt };
         }
-        const [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-            index_1.prisma.project.findMany({
-                where: dateFilter,
-                select: { status: true }
-            }),
-            index_1.prisma.invoice.findMany({
-                where: dateFilter,
-                select: { totalAmount: true, advancePaid: true, balanceAmount: true }
-            }),
-            index_1.prisma.laborContract.findMany({
-                where: dateFilter,
-                select: { totalAmount: true }
-            }),
-            index_1.prisma.expense.findMany({
-                where: expenseFilter,
-                select: { amount: true }
-            }),
-            index_1.prisma.electricityLog.findMany({
-                select: { month: true, totalBill: true }
-            })
-        ]);
+        const projects = await index_1.prisma.project.findMany({
+            where: dateFilter,
+            select: { status: true }
+        });
+        const invoices = await index_1.prisma.invoice.findMany({
+            where: dateFilter,
+            select: { totalAmount: true, advancePaid: true, balanceAmount: true }
+        });
+        const laborContracts = await index_1.prisma.laborContract.findMany({
+            where: dateFilter,
+            select: { totalAmount: true }
+        });
+        const expenses = await index_1.prisma.expense.findMany({
+            where: expenseFilter,
+            select: { amount: true }
+        });
+        const electricity = await index_1.prisma.electricityLog.findMany({
+            select: { month: true, totalBill: true }
+        });
         let totalLeads = 0;
         let activeProjects = 0;
         let pendingQuotations = 0;
@@ -111,7 +109,7 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 netProfit
             }
         };
-        fastCache_1.fastCache.set(cacheKey, summaryData, 120);
+        fastCache_1.fastCache.set(cacheKey, summaryData, 300);
         res.json(summaryData);
     }
     catch (error) {
