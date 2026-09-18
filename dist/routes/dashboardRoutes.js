@@ -39,55 +39,41 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         if (dateFilter.createdAt) {
             expenseFilter = { date: dateFilter.createdAt };
         }
-        const [totalLeads, activeProjects, pendingQuotations, readyForDispatch, invoices, laborContracts, expenses, electricity] = await Promise.all([
-            // 1. Total Enquiries (CRM Pipeline: enquiry, design_sharing, quotation, advance_payment)
-            index_1.prisma.project.count({
-                where: {
-                    status: { in: ['enquiry', 'design_sharing', 'quotation', 'advance_payment'] },
-                    ...dateFilter
-                }
+        const [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
+            index_1.prisma.project.findMany({
+                where: dateFilter,
+                select: { status: true }
             }),
-            // 2. Active Work Orders (Production Pipeline: shop_drawing, material_planning, production, work_order)
-            index_1.prisma.project.count({
-                where: {
-                    status: { in: ['shop_drawing', 'material_planning', 'production', 'work_order'] },
-                    ...dateFilter
-                }
-            }),
-            // 3. Pending Quotations (Enquiries currently in quotation stage)
-            index_1.prisma.project.count({
-                where: {
-                    status: 'quotation',
-                    ...dateFilter
-                }
-            }),
-            // 4. Dispatch Ready (Completed projects)
-            index_1.prisma.project.count({
-                where: {
-                    status: 'completed',
-                    ...dateFilter
-                }
-            }),
-            // 5. Financial invoices summary
             index_1.prisma.invoice.findMany({
                 where: dateFilter,
                 select: { totalAmount: true, advancePaid: true, balanceAmount: true }
             }),
-            // 6. Labor contracts
             index_1.prisma.laborContract.findMany({
                 where: dateFilter,
                 select: { totalAmount: true }
             }),
-            // 7. Factory operational expenses
             index_1.prisma.expense.findMany({
                 where: expenseFilter,
                 select: { amount: true }
             }),
-            // 8. Electricity logs
             index_1.prisma.electricityLog.findMany({
                 select: { month: true, totalBill: true }
             })
         ]);
+        let totalLeads = 0;
+        let activeProjects = 0;
+        let pendingQuotations = 0;
+        let readyForDispatch = 0;
+        for (const p of projects) {
+            if (['enquiry', 'design_sharing', 'quotation', 'advance_payment'].includes(p.status))
+                totalLeads++;
+            if (['shop_drawing', 'material_planning', 'production', 'work_order'].includes(p.status))
+                activeProjects++;
+            if (p.status === 'quotation')
+                pendingQuotations++;
+            if (p.status === 'completed')
+                readyForDispatch++;
+        }
         const totalRevenue = invoices.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
         const advancePaidTotal = invoices.reduce((acc, curr) => acc + (curr.advancePaid || 0), 0);
         const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + (curr.balanceAmount || 0), 0);
