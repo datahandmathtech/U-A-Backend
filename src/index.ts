@@ -8,11 +8,11 @@ import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
-const standardUri = 'mongodb+srv://yatree_admin:Mayank123@unnati-arts.iuq9w0n.mongodb.net/Unnati-arts?retryWrites=true&w=majority&readPreference=primaryPreferred';
+const standardUri = 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
 let effectiveDbUrl = process.env.DATABASE_URL || process.env.MONGO_URI || standardUri;
 
-// If env var is missing or contains pool overrides or shard strings, use standard resilient SRV URI
-if (!effectiveDbUrl || effectiveDbUrl.includes('ac-n3u3fkt-shard') || effectiveDbUrl.includes('cluster0.') || effectiveDbUrl.includes('maxPoolSize')) {
+// If env var is missing or contains old SRV string, use the resilient direct replica set URI
+if (!effectiveDbUrl || effectiveDbUrl.startsWith('mongodb+srv://') || effectiveDbUrl.includes('cluster0.') || effectiveDbUrl.includes('maxPoolSize')) {
   effectiveDbUrl = standardUri;
 }
 
@@ -34,6 +34,13 @@ export const prisma =
   });
 
 globalForPrisma.prisma = prisma;
+
+import mongoose from 'mongoose';
+mongoose.connect(effectiveDbUrl).then(() => {
+  console.log('MongoDB (Mongoose) connected successfully');
+}).catch((err) => {
+  console.error('MongoDB connection error:', err.message);
+});
 
 // Middleware
 app.use(compression());
