@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get production logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -796,6 +797,105 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
     catch (error) {
         console.error("Material Log Error:", error);
         res.status(500).json({ message: error.message || 'Server error updating material log approval' });
+    }
+});
+// Manual Bulk Approval of Pieces for Active Work Orders
+router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { projectId, slabId, pieceIds, stage, approvals, remarks = 'Manually Approved by Admin' } = req.body;
+        // Normalize approval items into array of { pieceId, stage }
+        let approvalList = [];
+        if (Array.isArray(approvals) && approvals.length > 0) {
+            approvalList = approvals.map((a) => ({
+                pieceId: String(a.pieceId),
+                stage: String(a.stage || 'Production').replace(' Work', '').trim()
+            }));
+        }
+        else if (Array.isArray(pieceIds) && pieceIds.length > 0) {
+            const defaultStage = String(stage || 'Production').replace(' Work', '').trim();
+            approvalList = pieceIds.map((pid) => ({
+                pieceId: String(pid),
+                stage: defaultStage
+            }));
+        }
+        if (approvalList.length === 0) {
+            return res.status(400).json({ message: 'No piece approvals provided' });
+        }
+        const uniquePieceIds = Array.from(new Set(approvalList.map(a => a.pieceId)));
+        // 1. Fetch pieces to get details
+        const pieces = await index_1.prisma.piece.findMany({
+            where: { id: { in: uniquePieceIds } },
+            include: { slab: true }
+        });
+        if (pieces.length === 0) {
+            return res.status(404).json({ message: 'No matching pieces found' });
+        }
+        const pieceMap = new Map(pieces.map(p => [p.id, p]));
+        // 2. Group approvals by stage and slab to update piece records and create clean production logs
+        const stageSlabMap = {};
+        for (const item of approvalList) {
+            const p = pieceMap.get(item.pieceId);
+            if (!p)
+                continue;
+            const stg = item.stage;
+            const sId = p.slabId || 'default';
+            if (!stageSlabMap[stg])
+                stageSlabMap[stg] = {};
+            if (!stageSlabMap[stg][sId])
+                stageSlabMap[stg][sId] = [];
+            stageSlabMap[stg][sId].push(p);
+        }
+        const createdLogs = [];
+        const targetProjectId = projectId || pieces[0]?.slab?.projectId;
+        for (const [stg, slabGroups] of Object.entries(stageSlabMap)) {
+            for (const [sId, groupPieces] of Object.entries(slabGroups)) {
+                if (!groupPieces || groupPieces.length === 0)
+                    continue;
+                const groupPieceIds = groupPieces.map(p => p.id);
+                const firstPiece = groupPieces[0];
+                const targetSlab = firstPiece?.slab;
+                const pieceNames = groupPieces.map(p => p.productName || `Piece ${p.pieceNumber}`).join(', ');
+                // Update piece status and stage
+                await index_1.prisma.piece.updateMany({
+                    where: { id: { in: groupPieceIds } },
+                    data: {
+                        status: 'completed',
+                        stage: stg
+                    }
+                });
+                // Create approved production log for audit and In/Out tracking
+                const log = await index_1.prisma.productionLog.create({
+                    data: {
+                        projectId: targetProjectId ? String(targetProjectId) : undefined,
+                        slabId: targetSlab ? targetSlab.id : (sId !== 'default' ? sId : undefined),
+                        productId: targetSlab?.id,
+                        productName: targetSlab ? `${targetSlab.name} - ${pieceNames}` : pieceNames,
+                        pieceIds: groupPieceIds,
+                        quantityProduced: groupPieces.length,
+                        stage: stg.includes('Work') ? stg : `${stg} Work`,
+                        transactionType: 'IN',
+                        approvalStatus: 'approved',
+                        remarks: remarks || `Manual Direct Approval for ${stg}: ${groupPieces.length} pieces (${pieceNames})`,
+                        workerName: req.user?.name || 'Admin',
+                        workerId: req.user?.id
+                    }
+                });
+                createdLogs.push(log);
+            }
+        }
+        // Invalidate caches
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        res.json({
+            success: true,
+            message: `Successfully approved ${approvalList.length} stage item(s) across ${uniquePieceIds.length} piece(s)`,
+            count: approvalList.length,
+            logs: createdLogs
+        });
+    }
+    catch (error) {
+        console.error('Manual piece approval error:', error);
+        res.status(500).json({ message: error.message || 'Server error during manual piece approval' });
     }
 });
 // Fetch approved material logs for Production Management

@@ -368,6 +368,8 @@ router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
                 }
             });
         }
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         const newPieces = await index_1.prisma.piece.findMany({
             where: { slabId: String(id), pieceNumber: { gt: currentMaxPieceNumber } }
         });
