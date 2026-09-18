@@ -154,12 +154,57 @@ const mountRoutes = (prefix = '') => {
 
 mountRoutes('/api');
 
+// Debug Mongo Route
+app.get('/api/debug-mongo', async (req, res) => {
+  const results: any = { time: new Date().toISOString() };
+  
+  // 1. Get Outbound IP
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
+    const ipJson: any = await ipRes.json();
+    results.serverOutboundIp = ipJson.ip;
+  } catch (e: any) {
+    results.serverOutboundIp = 'Could not fetch IP: ' + e.message;
+  }
+
+  // 2. Test native Mongoose/MongoDB connection
+  try {
+    const mongoose = require('mongoose');
+    const startM = Date.now();
+    const conn = await mongoose.createConnection(effectiveDbUrl, { serverSelectionTimeoutMS: 4000 }).asPromise();
+    results.mongooseTimeMs = Date.now() - startM;
+    const collections = await conn.db.listCollections().toArray();
+    results.collectionsCount = collections.length;
+    results.collections = collections.map((c: any) => c.name);
+    await conn.close();
+    results.mongooseStatus = 'SUCCESS';
+  } catch (mErr: any) {
+    results.mongooseStatus = 'FAILED: ' + mErr.message;
+  }
+
+  // 3. Test Prisma query with timeout
+  try {
+    const startP = Date.now();
+    const count = await Promise.race([
+      prisma.user.count(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma count timeout after 4000ms')), 4000))
+    ]);
+    results.prismaTimeMs = Date.now() - startP;
+    results.prismaUserCount = count;
+    results.prismaStatus = 'SUCCESS';
+  } catch (pErr: any) {
+    results.prismaStatus = 'FAILED: ' + pErr.message;
+  }
+
+  res.json(results);
+});
+
 // Ping & Health Routes
 app.get(['/api/ping', '/ping'], (req, res) => {
   const maskedUrl = (effectiveDbUrl || '').replace(/:([^:@]+)@/, ':****@');
   res.json({ 
     status: 'ok', 
-    version: 'v2.7-direct-seedlist',
+    version: 'v2.8-debug',
     time: new Date().toISOString(), 
     port,
     dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing',
