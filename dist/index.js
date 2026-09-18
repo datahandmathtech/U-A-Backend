@@ -144,7 +144,7 @@ app.get(['/api/ping', '/ping'], (req, res) => {
     const maskedUrl = (effectiveDbUrl || '').replace(/:([^:@]+)@/, ':****@');
     res.json({
         status: 'ok',
-        version: 'v2.6-pure-srv',
+        version: 'v2.7-direct-seedlist',
         time: new Date().toISOString(),
         port,
         dbStatus: process.env.DATABASE_URL ? 'configured' : 'missing',
