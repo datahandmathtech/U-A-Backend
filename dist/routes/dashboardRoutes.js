@@ -39,25 +39,36 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         if (dateFilter.createdAt) {
             expenseFilter = { date: dateFilter.createdAt };
         }
-        const projects = await index_1.prisma.project.findMany({
-            where: dateFilter,
-            select: { status: true }
-        });
-        const invoices = await index_1.prisma.invoice.findMany({
-            where: dateFilter,
-            select: { totalAmount: true, advancePaid: true, balanceAmount: true }
-        });
-        const laborContracts = await index_1.prisma.laborContract.findMany({
-            where: dateFilter,
-            select: { totalAmount: true }
-        });
-        const expenses = await index_1.prisma.expense.findMany({
-            where: expenseFilter,
-            select: { amount: true }
-        });
-        const electricity = await index_1.prisma.electricityLog.findMany({
-            select: { month: true, totalBill: true }
-        });
+        let projects = [];
+        let invoices = [];
+        let laborContracts = [];
+        let expenses = [];
+        let electricity = [];
+        const mongoose = require('mongoose');
+        const db = mongoose.connection?.db;
+        if (db && mongoose.connection.readyState === 1) {
+            try {
+                [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
+                    db.collection('Project').find(dateFilter, { projection: { status: 1 } }).toArray(),
+                    db.collection('Invoice').find(dateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
+                    db.collection('LaborContract').find(dateFilter, { projection: { totalAmount: 1 } }).toArray(),
+                    db.collection('Expense').find(expenseFilter, { projection: { amount: 1 } }).toArray(),
+                    db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
+                ]);
+            }
+            catch (mErr) {
+                console.warn('Mongoose dashboard query failed, falling back to Prisma:', mErr);
+            }
+        }
+        if (projects.length === 0 && invoices.length === 0) {
+            [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
+                index_1.prisma.project.findMany({ where: dateFilter, select: { status: true } }),
+                index_1.prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
+                index_1.prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
+                index_1.prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
+                index_1.prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
+            ]);
+        }
         let totalLeads = 0;
         let activeProjects = 0;
         let pendingQuotations = 0;

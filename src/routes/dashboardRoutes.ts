@@ -41,25 +41,38 @@ router.get('/summary', authenticate, async (req, res) => {
       expenseFilter = { date: dateFilter.createdAt };
     }
 
-    const projects = await prisma.project.findMany({
-      where: dateFilter,
-      select: { status: true }
-    });
-    const invoices = await prisma.invoice.findMany({
-      where: dateFilter,
-      select: { totalAmount: true, advancePaid: true, balanceAmount: true }
-    });
-    const laborContracts = await prisma.laborContract.findMany({
-      where: dateFilter,
-      select: { totalAmount: true }
-    });
-    const expenses = await prisma.expense.findMany({
-      where: expenseFilter,
-      select: { amount: true }
-    });
-    const electricity = await prisma.electricityLog.findMany({
-      select: { month: true, totalBill: true }
-    });
+    let projects: any[] = [];
+    let invoices: any[] = [];
+    let laborContracts: any[] = [];
+    let expenses: any[] = [];
+    let electricity: any[] = [];
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection?.db;
+
+    if (db && mongoose.connection.readyState === 1) {
+      try {
+        [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
+          db.collection('Project').find(dateFilter, { projection: { status: 1 } }).toArray(),
+          db.collection('Invoice').find(dateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
+          db.collection('LaborContract').find(dateFilter, { projection: { totalAmount: 1 } }).toArray(),
+          db.collection('Expense').find(expenseFilter, { projection: { amount: 1 } }).toArray(),
+          db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
+        ]);
+      } catch (mErr) {
+        console.warn('Mongoose dashboard query failed, falling back to Prisma:', mErr);
+      }
+    }
+
+    if (projects.length === 0 && invoices.length === 0) {
+      [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
+        prisma.project.findMany({ where: dateFilter, select: { status: true } }),
+        prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
+        prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
+        prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
+        prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
+      ]);
+    }
 
     let totalLeads = 0;
     let activeProjects = 0;
