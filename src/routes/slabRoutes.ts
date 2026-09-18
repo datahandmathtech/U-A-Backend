@@ -247,15 +247,42 @@ router.get('/pieces', authenticate, async (req, res) => {
 router.get('/project/:projectId', authenticate, async (req, res) => {
   try {
     const { projectId } = req.params;
+    const cacheKey = `slabs_project_${projectId}`;
+    const cached = fastCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const slabs = await prisma.slab.findMany({
       where: { projectId: String(projectId) },
       orderBy: { createdAt: 'asc' },
       include: {
         pieces: {
           include: { 
-            logs: true,
+            logs: {
+              select: {
+                id: true,
+                stage: true,
+                status: true,
+                createdAt: true,
+                startTime: true,
+                endTime: true
+              }
+            },
             sourceMaterial: {
-              include: { inventory: true }
+              select: {
+                id: true,
+                quantity: true,
+                usedQuantity: true,
+                inventory: {
+                  select: {
+                    id: true,
+                    itemName: true,
+                    length: true,
+                    width: true,
+                    thickness: true,
+                    blockNumber: true
+                  }
+                }
+              }
             }
           },
           orderBy: { pieceNumber: 'asc' }
@@ -263,8 +290,11 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         inventory: true
       }
     });
+
+    fastCache.set(cacheKey, slabs, 30);
     res.json(slabs);
   } catch (error) {
+    console.error('Error fetching slabs for project:', error);
     res.status(500).json({ message: 'Server error fetching slabs' });
   }
 });
@@ -325,6 +355,7 @@ router.post('/bulk-create', authenticate, async (req, res) => {
     }
 
     // Invalidate caches
+    fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
 
@@ -371,6 +402,9 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
 
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
     res.status(201).json(newSlab);
   } catch (error) {
     console.error(error);
@@ -513,6 +547,9 @@ router.put('/:id', authenticate, async (req, res) => {
     // Invalidate caches
     fastCache.invalidate('all_projects');
     
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
     res.json(updatedSlab);
   } catch (error: any) {
     console.error('Error updating slab:', error);

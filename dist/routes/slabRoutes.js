@@ -226,15 +226,42 @@ router.get('/pieces', authMiddleware_1.authenticate, async (req, res) => {
 router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { projectId } = req.params;
+        const cacheKey = `slabs_project_${projectId}`;
+        const cached = fastCache_1.fastCache.get(cacheKey);
+        if (cached)
+            return res.json(cached);
         const slabs = await index_1.prisma.slab.findMany({
             where: { projectId: String(projectId) },
             orderBy: { createdAt: 'asc' },
             include: {
                 pieces: {
                     include: {
-                        logs: true,
+                        logs: {
+                            select: {
+                                id: true,
+                                stage: true,
+                                status: true,
+                                createdAt: true,
+                                startTime: true,
+                                endTime: true
+                            }
+                        },
                         sourceMaterial: {
-                            include: { inventory: true }
+                            select: {
+                                id: true,
+                                quantity: true,
+                                usedQuantity: true,
+                                inventory: {
+                                    select: {
+                                        id: true,
+                                        itemName: true,
+                                        length: true,
+                                        width: true,
+                                        thickness: true,
+                                        blockNumber: true
+                                    }
+                                }
+                            }
                         }
                     },
                     orderBy: { pieceNumber: 'asc' }
@@ -242,9 +269,11 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                 inventory: true
             }
         });
+        fastCache_1.fastCache.set(cacheKey, slabs, 30);
         res.json(slabs);
     }
     catch (error) {
+        console.error('Error fetching slabs for project:', error);
         res.status(500).json({ message: 'Server error fetching slabs' });
     }
 });
@@ -301,6 +330,7 @@ router.post('/bulk-create', authMiddleware_1.authenticate, async (req, res) => {
             createdSlabs.push(created);
         }
         // Invalidate caches
+        fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.status(201).json({ message: `Successfully created ${createdSlabs.length} slabs`, count: createdSlabs.length, slabs: createdSlabs });
@@ -343,6 +373,9 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 pieces: pieces ? { create: pieces } : undefined
             }
         });
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.status(201).json(newSlab);
     }
     catch (error) {
@@ -470,6 +503,9 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         });
         // Invalidate caches
         fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.json(updatedSlab);
     }
     catch (error) {
