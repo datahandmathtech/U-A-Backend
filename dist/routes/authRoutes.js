@@ -146,45 +146,19 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
         }
         console.log('Login attempt for:', emailOrStaffId);
         const cleanInput = (emailOrStaffId || '').trim();
-        // Fast indexed path: Exact match on unique indexed fields (email, staffId, name)
-        const capitalizedInput = cleanInput.length > 0 ? (cleanInput.charAt(0).toUpperCase() + cleanInput.slice(1).toLowerCase()) : cleanInput;
-        let user = null;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-                user = await index_1.prisma.user.findFirst({
-                    where: {
-                        OR: [
-                            { email: cleanInput },
-                            { staffId: cleanInput },
-                            { email: cleanInput.toLowerCase() },
-                            { name: cleanInput },
-                            { name: cleanInput.toLowerCase() },
-                            { name: capitalizedInput }
-                        ]
-                    }
-                });
-                // Fallback path: Case-insensitive search if exact lookup returned null
-                if (!user) {
-                    user = await index_1.prisma.user.findFirst({
-                        where: {
-                            OR: [
-                                { email: { equals: cleanInput, mode: 'insensitive' } },
-                                { staffId: { equals: cleanInput, mode: 'insensitive' } },
-                                { name: { equals: cleanInput, mode: 'insensitive' } }
-                            ]
-                        }
-                    });
-                }
-                break;
+        const lowerInput = cleanInput.toLowerCase();
+        // Fast lookup using indexed email / staffId / name
+        const user = await index_1.prisma.user.findFirst({
+            where: {
+                OR: [
+                    { email: cleanInput },
+                    { email: lowerInput },
+                    { staffId: cleanInput },
+                    { staffId: lowerInput },
+                    { name: cleanInput }
+                ]
             }
-            catch (dbErr) {
-                console.warn(`User lookup attempt ${attempt} failed:`, dbErr?.message || dbErr);
-                if (attempt === 3)
-                    throw dbErr;
-                await new Promise(res => setTimeout(res, 500 * attempt));
-            }
-        }
-        console.log('User found:', user ? user.email : 'None');
+        });
         if (!user) {
             return res.status(400).json({ message: 'Invalid credentials. User not found.' });
         }

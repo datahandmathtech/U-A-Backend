@@ -21,20 +21,37 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
 // Get Active Work Orders (Comprehensive List)
 router.get('/work-orders', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('prod_work_orders');
+        if (cached)
+            return res.json(cached);
         const projects = await index_1.prisma.project.findMany({
             where: { status: 'work_order' },
-            include: {
+            select: {
+                id: true,
+                projectId: true,
+                requirements: true,
+                description: true,
+                progressPercentage: true,
                 machineLogs: {
-                    include: { machine: true }
+                    select: {
+                        startTime: true,
+                        endTime: true,
+                        machine: { select: { name: true } }
+                    }
                 },
-                productionLogs: true
+                productionLogs: {
+                    select: {
+                        id: true,
+                        status: true
+                    }
+                }
             }
         });
         const formattedWorkOrders = projects.map(p => {
             let totalUsageTimeHours = 0;
             let earliestStart = null;
             let latestEnd = null;
-            let machinesUsed = new Set();
+            const machinesUsed = new Set();
             p.machineLogs.forEach(log => {
                 if (log.machine)
                     machinesUsed.add(log.machine.name);
@@ -63,6 +80,7 @@ router.get('/work-orders', authMiddleware_1.authenticate, async (req, res) => {
                 progressPercentage: p.progressPercentage
             };
         });
+        fastCache_1.fastCache.set('prod_work_orders', formattedWorkOrders, 30);
         res.json(formattedWorkOrders);
     }
     catch (error) {
@@ -151,6 +169,9 @@ router.patch('/:id/complete', authMiddleware_1.authenticate, async (req, res) =>
 // Fetch all active/unreturned OUT logs (transactionType: 'OUT', approvalStatus: 'approved', isReturned: false/null)
 router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('prod_active_out_logs');
+        if (cached)
+            return res.json(cached);
         const [allApprovedOutLogs, pendingInLogs] = await Promise.all([
             index_1.prisma.productionLog.findMany({
                 where: {
@@ -189,6 +210,7 @@ router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) =
             log.returnedQty = (log.returnedQty || 0) + pendingReturns;
             return availableQty > 0;
         });
+        fastCache_1.fastCache.set('prod_active_out_logs', activeOutLogs, 15);
         res.json(activeOutLogs);
     }
     catch (error) {
@@ -199,6 +221,9 @@ router.get('/active-out-logs', authMiddleware_1.authenticate, async (req, res) =
 // Fetch rejected logs for Manager Dashboard
 router.get('/rejected-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('prod_rejected_logs');
+        if (cached)
+            return res.json(cached);
         const rejectedLogs = await index_1.prisma.productionLog.findMany({
             where: { approvalStatus: { in: ['rejected_admin', 'redo_in_progress'] } },
             orderBy: { createdAt: 'desc' },
@@ -207,6 +232,7 @@ router.get('/rejected-logs', authMiddleware_1.authenticate, async (req, res) => 
                 project: { select: { name: true, projectId: true, clientName: true } }
             }
         });
+        fastCache_1.fastCache.set('prod_rejected_logs', rejectedLogs, 15);
         res.json(rejectedLogs);
     }
     catch (error) {
@@ -362,6 +388,11 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                 console.warn(`Failed to update parentLog returnedQty for ${newLog.parentLogId}:`, err);
             }
         }
+        // Invalidate caches
+        fastCache_1.fastCache.invalidate('prod_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.status(201).json(newLog);
     }
     catch (error) {
@@ -372,6 +403,9 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
 // Fetch pending approvals for Admin
 router.get('/pending-approvals', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('prod_pending_approvals');
+        if (cached)
+            return res.json(cached);
         const pendingLogs = await index_1.prisma.productionLog.findMany({
             where: { approvalStatus: 'pending' },
             orderBy: { createdAt: 'desc' },
@@ -381,6 +415,7 @@ router.get('/pending-approvals', authMiddleware_1.authenticate, async (req, res)
                 machine: { select: { name: true } }
             }
         });
+        fastCache_1.fastCache.set('prod_pending_approvals', pendingLogs, 15);
         res.json(pendingLogs);
     }
     catch (error) {
@@ -792,6 +827,12 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
                 console.warn(`Failed to update parentLogId ${updatedLog.parentLogId}:`, err);
             }
         }
+        // Invalidate caches
+        fastCache_1.fastCache.invalidate('prod_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('all_names_v2');
         res.json(updatedLog || originalLog);
     }
     catch (error) {
@@ -923,6 +964,9 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
 // Fetch approved material logs for Production Management
 router.get('/approved-logs', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const cached = fastCache_1.fastCache.get('prod_approved_logs');
+        if (cached)
+            return res.json(cached);
         const approvedLogs = await index_1.prisma.productionLog.findMany({
             where: { approvalStatus: 'approved' },
             orderBy: { createdAt: 'desc' },
@@ -932,6 +976,7 @@ router.get('/approved-logs', authMiddleware_1.authenticate, async (req, res) => 
                 project: { select: { name: true, projectId: true, clientName: true } }
             }
         });
+        fastCache_1.fastCache.set('prod_approved_logs', approvedLogs, 15);
         res.json(approvedLogs);
     }
     catch (error) {
@@ -957,6 +1002,7 @@ router.patch('/:id/return', authMiddleware_1.authenticate, async (req, res) => {
                 returnDate: returnDate ? new Date(returnDate) : new Date()
             }
         });
+        fastCache_1.fastCache.invalidate('prod_');
         res.json(updated);
     }
     catch (error) {
@@ -1010,6 +1056,10 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 });
             }
         }
+        fastCache_1.fastCache.invalidate('prod_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.json(updated);
     }
     catch (error) {
@@ -1022,6 +1072,10 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         await index_1.prisma.productionLog.delete({
             where: { id: req.params.id }
         });
+        fastCache_1.fastCache.invalidate('prod_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         res.json({ message: 'Material log deleted successfully' });
     }
     catch (error) {
