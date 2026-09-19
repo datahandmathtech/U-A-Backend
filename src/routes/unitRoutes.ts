@@ -9,9 +9,30 @@ router.get('/', async (req, res) => {
     const cached = fastCache.get('all_units');
     if (cached) return res.json(cached);
 
-    const units = await prisma.unitCategory.findMany({
-      orderBy: { name: 'asc' }
-    });
+    let units: any[] = [];
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db && mongoose.connection.readyState === 1) {
+      try {
+        const raw = await db.collection('UnitCategory').find({}).sort({ name: 1 }).toArray();
+        units = raw.map((u: any) => ({
+          id: u._id.toString(),
+          name: u.name,
+          createdAt: u.createdAt,
+          updatedAt: u.updatedAt
+        }));
+      } catch (err) {
+        console.warn('Mongoose unit query failed:', err);
+      }
+    }
+
+    if (units.length === 0) {
+      units = await prisma.unitCategory.findMany({
+        orderBy: { name: 'asc' }
+      });
+    }
+
     fastCache.set('all_units', units, 300);
     res.json(units);
   } catch (error) {

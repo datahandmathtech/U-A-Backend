@@ -11,9 +11,32 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const cached = fastCache_1.fastCache.get('all_machines');
         if (cached)
             return res.json(cached);
-        const machines = await index_1.prisma.machine.findMany({
-            orderBy: { createdAt: 'desc' }
-        });
+        let machines = [];
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db && mongoose.connection.readyState === 1) {
+            try {
+                const raw = await db.collection('Machine').find({}).sort({ createdAt: -1 }).toArray();
+                machines = raw.map((m) => ({
+                    id: m._id.toString(),
+                    name: m.name,
+                    type: m.type,
+                    hourlyCost: m.hourlyCost,
+                    maintenanceIntervalHours: m.maintenanceIntervalHours,
+                    status: m.status,
+                    createdAt: m.createdAt,
+                    updatedAt: m.updatedAt
+                }));
+            }
+            catch (err) {
+                console.warn('Mongoose machine query failed:', err);
+            }
+        }
+        if (machines.length === 0) {
+            machines = await index_1.prisma.machine.findMany({
+                orderBy: { createdAt: 'desc' }
+            });
+        }
         fastCache_1.fastCache.set('all_machines', machines, 120);
         res.json(machines);
     }
