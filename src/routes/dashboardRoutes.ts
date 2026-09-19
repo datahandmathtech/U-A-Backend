@@ -12,11 +12,15 @@ router.get('/summary', authenticate, async (req, res) => {
     const cached = fastCache.get(cacheKey);
     if (cached) return res.json(cached);
     
-    let dateFilter: any = {};
+    let prismaDateFilter: any = {};
+    let mongoDateFilter: any = {};
+    let prismaExpenseFilter: any = {};
+    let mongoExpenseFilter: any = {};
+
     if (fy && typeof fy === 'string') {
       const startYear = parseInt((fy as string).split('-')[0] as string);
       const endYear = parseInt((fy as string).split('-')[1] as string);
-      let startDate, endDate;
+      let startDate: Date, endDate: Date;
       
       if (month && month !== '') {
         const monthNum = parseInt(month as string);
@@ -27,18 +31,27 @@ router.get('/summary', authenticate, async (req, res) => {
         startDate = new Date(startYear, 3, 1);
         endDate = new Date(endYear, 2, 31, 23, 59, 59, 999);
       }
-      dateFilter = {
+
+      prismaDateFilter = {
         createdAt: {
           gte: startDate,
           lte: endDate
         }
       };
-    }
+      mongoDateFilter = {
+        createdAt: {
+          $gte: startDate,
+          $lte: endDate
+        }
+      };
 
-    // Expense date filter (uses 'date' if present)
-    let expenseFilter = {};
-    if (dateFilter.createdAt) {
-      expenseFilter = { date: dateFilter.createdAt };
+      prismaExpenseFilter = { date: prismaDateFilter.createdAt };
+      mongoExpenseFilter = {
+        $or: [
+          { date: mongoDateFilter.createdAt },
+          { createdAt: mongoDateFilter.createdAt }
+        ]
+      };
     }
 
     let projects: any[] = [];
@@ -48,15 +61,25 @@ router.get('/summary', authenticate, async (req, res) => {
     let electricity: any[] = [];
 
     const mongoose = require('mongoose');
-    const db = mongoose.connection?.db;
+    let db = mongoose.connection?.db;
 
-    if (db && mongoose.connection.readyState === 1) {
+    if (!db || mongoose.connection.readyState !== 1) {
+      try {
+        const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+        const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+        db = conn.db;
+      } catch (err) {
+        console.warn('Could not establish dedicated Mongoose connection:', err);
+      }
+    }
+
+    if (db) {
       try {
         [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-          db.collection('Project').find(dateFilter, { projection: { status: 1 } }).toArray(),
-          db.collection('Invoice').find(dateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
-          db.collection('LaborContract').find(dateFilter, { projection: { totalAmount: 1 } }).toArray(),
-          db.collection('Expense').find(expenseFilter, { projection: { amount: 1 } }).toArray(),
+          db.collection('Project').find(mongoDateFilter, { projection: { status: 1 } }).toArray(),
+          db.collection('Invoice').find(mongoDateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
+          db.collection('LaborContract').find(mongoDateFilter, { projection: { totalAmount: 1 } }).toArray(),
+          db.collection('Expense').find(mongoExpenseFilter, { projection: { amount: 1 } }).toArray(),
           db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
         ]);
       } catch (mErr) {
@@ -66,10 +89,10 @@ router.get('/summary', authenticate, async (req, res) => {
 
     if (projects.length === 0 && invoices.length === 0) {
       [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-        prisma.project.findMany({ where: dateFilter, select: { status: true } }),
-        prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
-        prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
-        prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
+        prisma.project.findMany({ where: prismaDateFilter, select: { status: true } }),
+        prisma.invoice.findMany({ where: prismaDateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
+        prisma.laborContract.findMany({ where: prismaDateFilter, select: { totalAmount: true } }),
+        prisma.expense.findMany({ where: prismaExpenseFilter, select: { amount: true } }),
         prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
       ]);
     }

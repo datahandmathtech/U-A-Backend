@@ -12,7 +12,10 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
-        let dateFilter = {};
+        let prismaDateFilter = {};
+        let mongoDateFilter = {};
+        let prismaExpenseFilter = {};
+        let mongoExpenseFilter = {};
         if (fy && typeof fy === 'string') {
             const startYear = parseInt(fy.split('-')[0]);
             const endYear = parseInt(fy.split('-')[1]);
@@ -27,17 +30,25 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 startDate = new Date(startYear, 3, 1);
                 endDate = new Date(endYear, 2, 31, 23, 59, 59, 999);
             }
-            dateFilter = {
+            prismaDateFilter = {
                 createdAt: {
                     gte: startDate,
                     lte: endDate
                 }
             };
-        }
-        // Expense date filter (uses 'date' if present)
-        let expenseFilter = {};
-        if (dateFilter.createdAt) {
-            expenseFilter = { date: dateFilter.createdAt };
+            mongoDateFilter = {
+                createdAt: {
+                    $gte: startDate,
+                    $lte: endDate
+                }
+            };
+            prismaExpenseFilter = { date: prismaDateFilter.createdAt };
+            mongoExpenseFilter = {
+                $or: [
+                    { date: mongoDateFilter.createdAt },
+                    { createdAt: mongoDateFilter.createdAt }
+                ]
+            };
         }
         let projects = [];
         let invoices = [];
@@ -45,14 +56,24 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         let expenses = [];
         let electricity = [];
         const mongoose = require('mongoose');
-        const db = mongoose.connection?.db;
-        if (db && mongoose.connection.readyState === 1) {
+        let db = mongoose.connection?.db;
+        if (!db || mongoose.connection.readyState !== 1) {
+            try {
+                const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+                const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+                db = conn.db;
+            }
+            catch (err) {
+                console.warn('Could not establish dedicated Mongoose connection:', err);
+            }
+        }
+        if (db) {
             try {
                 [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-                    db.collection('Project').find(dateFilter, { projection: { status: 1 } }).toArray(),
-                    db.collection('Invoice').find(dateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
-                    db.collection('LaborContract').find(dateFilter, { projection: { totalAmount: 1 } }).toArray(),
-                    db.collection('Expense').find(expenseFilter, { projection: { amount: 1 } }).toArray(),
+                    db.collection('Project').find(mongoDateFilter, { projection: { status: 1 } }).toArray(),
+                    db.collection('Invoice').find(mongoDateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
+                    db.collection('LaborContract').find(mongoDateFilter, { projection: { totalAmount: 1 } }).toArray(),
+                    db.collection('Expense').find(mongoExpenseFilter, { projection: { amount: 1 } }).toArray(),
                     db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
                 ]);
             }
@@ -62,10 +83,10 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         }
         if (projects.length === 0 && invoices.length === 0) {
             [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-                index_1.prisma.project.findMany({ where: dateFilter, select: { status: true } }),
-                index_1.prisma.invoice.findMany({ where: dateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
-                index_1.prisma.laborContract.findMany({ where: dateFilter, select: { totalAmount: true } }),
-                index_1.prisma.expense.findMany({ where: expenseFilter, select: { amount: true } }),
+                index_1.prisma.project.findMany({ where: prismaDateFilter, select: { status: true } }),
+                index_1.prisma.invoice.findMany({ where: prismaDateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
+                index_1.prisma.laborContract.findMany({ where: prismaDateFilter, select: { totalAmount: true } }),
+                index_1.prisma.expense.findMany({ where: prismaExpenseFilter, select: { amount: true } }),
                 index_1.prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
             ]);
         }
