@@ -11,57 +11,147 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const cached = fastCache_1.fastCache.get('all_projects');
         if (cached)
             return res.json(cached);
-        const projects = await index_1.prisma.project.findMany({
-            orderBy: { createdAt: 'desc' },
-            include: {
-                assignedTo: { select: { name: true } },
-                quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
-                slabs: {
-                    select: {
-                        id: true,
-                        name: true,
-                        size: true,
-                        status: true,
-                        requiredStages: true,
-                        pieces: {
-                            select: {
-                                id: true,
-                                pieceNumber: true,
-                                productName: true,
-                                size: true,
-                                stage: true,
-                                status: true
-                            }
-                        }
-                    }
-                }
+        let enrichedProjects = [];
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (!db || mongoose.connection.readyState !== 1) {
+            try {
+                const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+                const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+                db = conn.db;
             }
-        });
-        const enrichedProjects = projects.map(p => {
-            let calculatedTotalPieces = p.totalPieces || 0;
-            if (p.quotations && p.quotations.length > 0) {
-                const firstQuote = p.quotations[0];
-                if (firstQuote && firstQuote.products) {
-                    const products = firstQuote.products;
+            catch (err) {
+                console.warn('Could not establish dedicated Mongoose connection:', err);
+            }
+        }
+        if (db) {
+            try {
+                const rawProjects = await db.collection('Project').find({}).sort({ createdAt: -1 }).toArray();
+                const projectIds = rawProjects.map((p) => p._id.toString());
+                const [rawSlabs, rawQuotes, rawUsers] = await Promise.all([
+                    db.collection('Slab').find({ projectId: { $in: projectIds } }).toArray(),
+                    db.collection('Quotation').find({ projectId: { $in: projectIds } }).sort({ createdAt: -1 }).toArray(),
+                    db.collection('User').find({}, { projection: { name: 1 } }).toArray()
+                ]);
+                const userMap = new Map();
+                rawUsers.forEach((u) => userMap.set(u._id.toString(), u.name));
+                const quoteMap = new Map();
+                rawQuotes.forEach((q) => {
+                    if (!quoteMap.has(q.projectId))
+                        quoteMap.set(q.projectId, q);
+                });
+                const slabMap = new Map();
+                rawSlabs.forEach((s) => {
+                    const sObj = {
+                        id: s._id.toString(),
+                        name: s.name,
+                        size: s.size,
+                        status: s.status,
+                        requiredStages: s.requiredStages,
+                        pieces: s.pieces || []
+                    };
+                    if (!slabMap.has(s.projectId))
+                        slabMap.set(s.projectId, []);
+                    slabMap.get(s.projectId).push(sObj);
+                });
+                enrichedProjects = rawProjects.map((p) => {
+                    const pId = p._id.toString();
+                    const assignedName = p.assignedToId ? userMap.get(p.assignedToId) : null;
+                    const firstQuote = quoteMap.get(pId);
+                    let calculatedTotalPieces = p.totalPieces || 0;
+                    let products = firstQuote?.products || [];
                     if (Array.isArray(products) && products.length > 0) {
                         const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
                         if (sum > 0)
                             calculatedTotalPieces = sum;
                     }
-                }
+                    return {
+                        id: pId,
+                        projectId: p.projectId,
+                        name: p.name,
+                        description: p.description,
+                        status: p.status,
+                        clientName: p.clientName,
+                        clientContact: p.clientContact,
+                        clientEmail: p.clientEmail,
+                        customerPhoto: p.customerPhoto,
+                        enquirySource: p.enquirySource,
+                        location: p.location,
+                        requirements: p.requirements,
+                        startDate: p.startDate,
+                        deadline: p.deadline,
+                        deliveryDate: p.deadline || p.deliveryDate,
+                        totalPieces: calculatedTotalPieces,
+                        completedPieces: p.completedPieces || 0,
+                        progressPercentage: p.progressPercentage || 0,
+                        assignedToId: p.assignedToId,
+                        assignedTo: assignedName ? { name: assignedName } : null,
+                        clientHandle: p.clientHandle || assignedName,
+                        isDirectWorkOrder: p.isDirectWorkOrder || false,
+                        createdAt: p.createdAt,
+                        updatedAt: p.updatedAt,
+                        products,
+                        slabs: slabMap.get(pId) || []
+                    };
+                });
             }
-            const { quotations, ...projectData } = p;
-            return {
-                ...projectData,
-                products: p.quotations?.[0]?.products || [],
-                slabs: p.slabs || [],
-                totalPieces: calculatedTotalPieces,
-                completedPieces: projectData.completedPieces || 0,
-                deliveryDate: projectData.deadline || projectData.deliveryDate,
-                clientHandle: projectData.clientHandle || projectData.assignedTo?.name
-            };
-        });
-        fastCache_1.fastCache.set('all_projects', enrichedProjects, 120);
+            catch (mErr) {
+                console.warn('Mongoose project fetch failed, falling back to Prisma:', mErr);
+            }
+        }
+        if (enrichedProjects.length === 0) {
+            const projects = await index_1.prisma.project.findMany({
+                orderBy: { createdAt: 'desc' },
+                include: {
+                    assignedTo: { select: { name: true } },
+                    quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+                    slabs: {
+                        select: {
+                            id: true,
+                            name: true,
+                            size: true,
+                            status: true,
+                            requiredStages: true,
+                            pieces: {
+                                select: {
+                                    id: true,
+                                    pieceNumber: true,
+                                    productName: true,
+                                    size: true,
+                                    stage: true,
+                                    status: true
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            enrichedProjects = projects.map(p => {
+                let calculatedTotalPieces = p.totalPieces || 0;
+                if (p.quotations && p.quotations.length > 0) {
+                    const firstQuote = p.quotations[0];
+                    if (firstQuote && firstQuote.products) {
+                        const products = firstQuote.products;
+                        if (Array.isArray(products) && products.length > 0) {
+                            const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+                            if (sum > 0)
+                                calculatedTotalPieces = sum;
+                        }
+                    }
+                }
+                const { quotations, ...projectData } = p;
+                return {
+                    ...projectData,
+                    products: p.quotations?.[0]?.products || [],
+                    slabs: p.slabs || [],
+                    totalPieces: calculatedTotalPieces,
+                    completedPieces: projectData.completedPieces || 0,
+                    deliveryDate: projectData.deadline || projectData.deliveryDate,
+                    clientHandle: projectData.clientHandle || projectData.assignedTo?.name
+                };
+            });
+        }
+        fastCache_1.fastCache.set('all_projects', enrichedProjects, 60);
         res.json(enrichedProjects);
     }
     catch (error) {
