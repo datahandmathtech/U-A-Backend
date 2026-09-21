@@ -8,6 +8,17 @@ const router = (0, express_1.Router)();
 router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { projectId } = req.params;
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const rawQuotes = await db.collection('Quotation').find({ projectId: String(projectId) }).sort({ createdAt: -1 }).toArray();
+                return res.json(rawQuotes.map((q) => ({ ...q, id: q._id.toString() })));
+            }
+            catch (mErr) {
+                console.warn('Mongoose quotations fetch failed:', mErr);
+            }
+        }
         const quotations = await index_1.prisma.quotation.findMany({
             where: { projectId: String(projectId) },
             orderBy: { createdAt: 'desc' }
@@ -21,6 +32,17 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
 // Get all saved quotation terms
 router.get('/terms', authMiddleware_1.authenticate, async (req, res) => {
     try {
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const rawTerms = await db.collection('QuotationTerm').find({}).sort({ createdAt: -1 }).toArray();
+                return res.json(rawTerms.map((t) => ({ id: t._id.toString(), text: t.text, createdAt: t.createdAt })));
+            }
+            catch (mErr) {
+                console.warn('Mongoose terms fetch failed:', mErr);
+            }
+        }
         const terms = await index_1.prisma.quotationTerm.findMany({
             orderBy: { createdAt: 'desc' }
         });

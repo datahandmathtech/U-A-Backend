@@ -10,6 +10,38 @@ const router = express_1.default.Router();
 router.get('/:projectId', async (req, res) => {
     try {
         const { projectId } = req.params;
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const rawDrawings = await db.collection('ShopDrawing').find({ projectId: String(projectId) }).sort({ createdAt: -1 }).toArray();
+                const drawingIds = rawDrawings.map((d) => d._id.toString());
+                const rawApprovals = await db.collection('DrawingApproval').find({ drawingId: { $in: drawingIds } }).toArray();
+                const appMap = new Map();
+                rawApprovals.forEach((a) => {
+                    if (!appMap.has(a.drawingId))
+                        appMap.set(a.drawingId, []);
+                    appMap.get(a.drawingId).push({ ...a, id: a._id.toString() });
+                });
+                const enriched = rawDrawings.map((d) => ({
+                    id: d._id.toString(),
+                    projectId: d.projectId,
+                    title: d.title,
+                    type: d.type,
+                    fileUrl: d.fileUrl,
+                    comments: d.comments,
+                    version: d.version,
+                    status: d.status,
+                    createdAt: d.createdAt,
+                    updatedAt: d.updatedAt,
+                    approvals: appMap.get(d._id.toString()) || []
+                }));
+                return res.json(enriched);
+            }
+            catch (mErr) {
+                console.warn('Mongoose drawing fetch failed:', mErr);
+            }
+        }
         const drawings = await index_1.prisma.shopDrawing.findMany({
             where: { projectId },
             include: { approvals: true },

@@ -167,12 +167,73 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-// Create a new project (Enquiry)
+// Get single project
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const project = await prisma.project.findUnique({
-      where: { id: String(id) },
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        let pQuery: any = { id: String(id) };
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          pQuery = { $or: [{ _id: new mongoose.Types.ObjectId(id) }, { id: String(id) }, { projectId: String(id) }] };
+        } else {
+          pQuery = { $or: [{ id: String(id) }, { projectId: String(id) }] };
+        }
+        const rawProj = await db.collection('Project').findOne(pQuery);
+        if (rawProj) {
+          const pId = rawProj._id.toString();
+          const pCustomId = rawProj.id || pId;
+
+          const [invoices, quotations, user] = await Promise.all([
+            db.collection('Invoice').find({ $or: [{ projectId: pId }, { projectId: pCustomId }] }).toArray(),
+            db.collection('Quotation').find({ $or: [{ projectId: pId }, { projectId: pCustomId }] }).sort({ createdAt: -1 }).toArray(),
+            rawProj.assignedToId ? db.collection('User').findOne({ $or: [{ _id: mongoose.Types.ObjectId.isValid(rawProj.assignedToId) ? new mongoose.Types.ObjectId(rawProj.assignedToId) : null }, { id: rawProj.assignedToId }] }, { projection: { name: 1 } }) : null
+          ]);
+
+          return res.json({
+            id: rawProj._id.toString(),
+            projectId: rawProj.projectId,
+            name: rawProj.name,
+            description: rawProj.description,
+            status: rawProj.status,
+            clientName: rawProj.clientName,
+            clientContact: rawProj.clientContact,
+            clientEmail: rawProj.clientEmail,
+            customerPhoto: rawProj.customerPhoto,
+            enquirySource: rawProj.enquirySource,
+            location: rawProj.location,
+            requirements: rawProj.requirements,
+            startDate: rawProj.startDate,
+            deadline: rawProj.deadline,
+            deliveryDate: rawProj.deadline || rawProj.deliveryDate,
+            totalPieces: rawProj.totalPieces || 0,
+            completedPieces: rawProj.completedPieces || 0,
+            progressPercentage: rawProj.progressPercentage || 0,
+            assignedToId: rawProj.assignedToId,
+            assignedTo: user ? { name: user.name } : null,
+            clientHandle: rawProj.clientHandle || user?.name,
+            isDirectWorkOrder: rawProj.isDirectWorkOrder || false,
+            createdAt: rawProj.createdAt,
+            updatedAt: rawProj.updatedAt,
+            invoices: invoices.map((inv: any) => ({ ...inv, id: inv._id.toString() })),
+            quotations: quotations.map((q: any) => ({ ...q, id: q._id.toString() }))
+          });
+        }
+      } catch (mErr) {
+        console.warn('Mongoose single project fetch failed, falling back to Prisma:', mErr);
+      }
+    }
+
+    const project = await prisma.project.findFirst({
+      where: {
+        OR: [
+          { id: String(id) },
+          { projectId: String(id) }
+        ]
+      },
       include: { 
         assignedTo: { select: { name: true } }, 
         invoices: true,
@@ -184,6 +245,7 @@ router.get('/:id', authenticate, async (req, res) => {
     if (!project) return res.status(404).json({ message: 'Project not found' });
     res.json(project);
   } catch (error) {
+    console.error('Error fetching project by id:', error);
     res.status(500).json({ message: 'Server error fetching project' });
   }
 });
@@ -475,6 +537,41 @@ router.delete('/:id', authenticate, async (req, res) => {
 router.get('/:id/materials', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawMaterials = await db.collection('ProjectMaterial').find({ projectId: String(id) }).sort({ addedAt: -1 }).toArray();
+        const invIds = rawMaterials.map((m: any) => m.inventoryId).filter(Boolean);
+        const invObjIds = invIds.filter((invId: string) => mongoose.Types.ObjectId.isValid(invId)).map((invId: string) => new mongoose.Types.ObjectId(invId));
+
+        const rawInvs = await db.collection('Inventory').find({
+          $or: [
+            { _id: { $in: invObjIds } },
+            { id: { $in: invIds } }
+          ]
+        }).toArray();
+        const invMap = new Map();
+        rawInvs.forEach((inv: any) => invMap.set(inv._id.toString(), { ...inv, id: inv._id.toString() }));
+
+        const enriched = rawMaterials.map((m: any) => ({
+          id: m._id.toString(),
+          projectId: m.projectId,
+          inventoryId: m.inventoryId,
+          quantity: m.quantity,
+          cost: m.cost,
+          addedAt: m.addedAt,
+          createdAt: m.createdAt,
+          updatedAt: m.updatedAt,
+          inventory: invMap.get(m.inventoryId) || null
+        }));
+        return res.json(enriched);
+      } catch (mErr) {
+        console.warn('Mongoose project materials fetch failed:', mErr);
+      }
+    }
+
     const materials = await prisma.projectMaterial.findMany({
       where: { projectId: String(id) },
       include: { inventory: true },

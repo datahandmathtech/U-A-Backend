@@ -97,6 +97,42 @@ router.get('/work-orders', authenticate, async (req, res) => {
 router.get('/project/:projectId', authenticate, async (req, res) => {
   try {
     const { projectId } = req.params;
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawLogs = await db.collection('ProductionLog').find({ projectId: String(projectId) }).sort({ createdAt: 1 }).toArray();
+        const machineIds = rawLogs.map((l: any) => l.machineId).filter(Boolean);
+        const workerIds = rawLogs.map((l: any) => l.workerId).filter(Boolean);
+
+        const machineObjIds = machineIds.filter((mId: string) => mongoose.Types.ObjectId.isValid(mId)).map((mId: string) => new mongoose.Types.ObjectId(mId));
+        const workerObjIds = workerIds.filter((wId: string) => mongoose.Types.ObjectId.isValid(wId)).map((wId: string) => new mongoose.Types.ObjectId(wId));
+
+        const [rawMachines, rawWorkers] = await Promise.all([
+          db.collection('Machine').find({ $or: [{ _id: { $in: machineObjIds } }, { id: { $in: machineIds } }] }, { projection: { name: 1 } }).toArray(),
+          db.collection('Staff').find({ $or: [{ _id: { $in: workerObjIds } }, { id: { $in: workerIds } }] }, { projection: { name: 1 } }).toArray()
+        ]);
+
+        const machineMap = new Map();
+        rawMachines.forEach((m: any) => machineMap.set(m._id.toString(), { name: m.name }));
+
+        const workerMap = new Map();
+        rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name }));
+
+        const enriched = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          machine: l.machineId ? machineMap.get(l.machineId) || null : null,
+          worker: l.workerId ? workerMap.get(l.workerId) || null : null
+        }));
+
+        return res.json(enriched);
+      } catch (mErr) {
+        console.warn('Mongoose production logs fetch failed:', mErr);
+      }
+    }
+
     const logs = await prisma.productionLog.findMany({
       where: { projectId: String(projectId) },
       orderBy: { createdAt: 'asc' },
