@@ -73,6 +73,7 @@ router.get('/summary', authenticate, async (req, res) => {
       }
     }
 
+    let dbSuccess = false;
     if (db) {
       try {
         [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
@@ -82,12 +83,13 @@ router.get('/summary', authenticate, async (req, res) => {
           db.collection('Expense').find(mongoExpenseFilter, { projection: { amount: 1 } }).toArray(),
           db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
         ]);
+        dbSuccess = true;
       } catch (mErr) {
         console.warn('Mongoose dashboard query failed, falling back to Prisma:', mErr);
       }
     }
 
-    if (projects.length === 0 && invoices.length === 0) {
+    if (!dbSuccess) {
       [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
         prisma.project.findMany({ where: prismaDateFilter, select: { status: true } }),
         prisma.invoice.findMany({ where: prismaDateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),

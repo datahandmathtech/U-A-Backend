@@ -130,18 +130,18 @@ const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/dashboard`, dashboardRoutes_1.default);
     app.use(`${prefix}/qa`, qaRoutes_1.default);
     app.use(`${prefix}/labor`, laborRoutes_1.default);
-    app.use(`${prefix}/machine-logs`, machineLogRoutes_1.default);
+    app.use([`${prefix}/machine-logs`, `${prefix}/machine_logs`], machineLogRoutes_1.default);
     app.use(`${prefix}/expenses`, expenseRoutes_1.default);
     app.use(`${prefix}/slabs`, slabRoutes_1.default);
     app.use(`${prefix}/electricity`, electricityRoutes_1.default);
     app.use(`${prefix}/closure`, closureRoutes_1.default);
-    app.use(`${prefix}/live-feed`, liveFeedRoutes_1.default);
+    app.use([`${prefix}/live-feed`, `${prefix}/live_feed`], liveFeedRoutes_1.default);
     app.use(`${prefix}/upload`, uploadRoutes_1.default);
     app.use(`${prefix}/drawings`, drawingRoutes_1.default);
     app.use(`${prefix}/slabs`, slabRoutes_1.default);
     app.use(`${prefix}/vendors`, vendorRoutes_1.default);
     app.use(`${prefix}/waste`, wasteRoutes_1.default);
-    app.use(`${prefix}/packing-items`, packingRoutes_1.default);
+    app.use([`${prefix}/packing-items`, `${prefix}/packing_items`], packingRoutes_1.default);
 };
 mountRoutes('/api');
 // Debug Mongo Route

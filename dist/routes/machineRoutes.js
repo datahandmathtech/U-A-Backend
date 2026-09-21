@@ -27,18 +27,18 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     createdAt: m.createdAt,
                     updatedAt: m.updatedAt
                 }));
+                fastCache_1.fastCache.set('all_machines', machines, 120);
+                return res.json(machines);
             }
             catch (err) {
-                console.warn('Mongoose machine query failed:', err);
+                console.warn('Mongoose machine query failed, falling back to Prisma:', err);
             }
         }
-        if (machines.length === 0) {
-            machines = await index_1.prisma.machine.findMany({
-                orderBy: { createdAt: 'desc' }
-            });
-        }
-        fastCache_1.fastCache.set('all_machines', machines, 120);
-        res.json(machines);
+        const prismaMachines = await index_1.prisma.machine.findMany({
+            orderBy: { createdAt: 'desc' }
+        });
+        fastCache_1.fastCache.set('all_machines', prismaMachines, 120);
+        res.json(prismaMachines);
     }
     catch (error) {
         res.status(500).json({ message: 'Server error fetching machines' });

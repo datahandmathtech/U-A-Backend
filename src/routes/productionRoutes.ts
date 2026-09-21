@@ -8,6 +8,44 @@ const router = Router();
 // Get production logs
 router.get('/', authenticate, async (req, res) => {
   try {
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawLogs = await db.collection('ProductionLog').find({}).sort({ createdAt: -1 }).limit(1000).toArray();
+        const projectIds = Array.from(new Set(rawLogs.map((l: any) => l.projectId).filter(Boolean)));
+        const machineIds = Array.from(new Set(rawLogs.map((l: any) => l.machineId).filter(Boolean)));
+
+        const projectObjIds = projectIds.filter((id: any) => mongoose.Types.ObjectId.isValid(id)).map((id: any) => new mongoose.Types.ObjectId(id));
+        const machineObjIds = machineIds.filter((id: any) => mongoose.Types.ObjectId.isValid(id)).map((id: any) => new mongoose.Types.ObjectId(id));
+
+        const [rawProjects, rawMachines] = await Promise.all([
+          db.collection('Project').find({ $or: [{ _id: { $in: projectObjIds } }, { id: { $in: projectIds } }] }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray(),
+          db.collection('Machine').find({ $or: [{ _id: { $in: machineObjIds } }, { id: { $in: machineIds } }] }, { projection: { name: 1 } }).toArray()
+        ]);
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const machineMap = new Map();
+        rawMachines.forEach((m: any) => machineMap.set(m._id.toString(), { name: m.name }));
+
+        const enrichedLogs = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          projectId: l.projectId ? l.projectId.toString() : null,
+          machineId: l.machineId ? l.machineId.toString() : null,
+          project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
+          machine: l.machineId ? machineMap.get(l.machineId.toString()) : null
+        }));
+
+        return res.json(enrichedLogs);
+      } catch (mErr) {
+        console.warn('Mongoose production logs query failed, falling back to Prisma:', mErr);
+      }
+    }
+
     const logs = await prisma.productionLog.findMany({
       orderBy: { createdAt: 'desc' },
       include: { project: { select: { name: true } }, machine: { select: { name: true } } }
@@ -23,6 +61,86 @@ router.get('/work-orders', authenticate, async (req, res) => {
   try {
     const cached = fastCache.get('prod_work_orders');
     if (cached) return res.json(cached);
+
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawProjects = await db.collection('Project').find({ status: 'work_order' }).toArray();
+        const pIds = rawProjects.map((p: any) => p._id.toString());
+        const pObjIds = pIds.map((id: string) => new mongoose.Types.ObjectId(id));
+
+        const [rawMachineLogs, rawProdLogs, rawMachines] = await Promise.all([
+          db.collection('MachineLog').find({ $or: [{ projectId: { $in: pIds } }, { projectId: { $in: pObjIds } }] }).toArray(),
+          db.collection('ProductionLog').find({ $or: [{ projectId: { $in: pIds } }, { projectId: { $in: pObjIds } }] }).toArray(),
+          db.collection('Machine').find({}, { projection: { name: 1 } }).toArray()
+        ]);
+
+        const machineMap = new Map();
+        rawMachines.forEach((m: any) => machineMap.set(m._id.toString(), m.name));
+
+        const mLogsByProject = new Map();
+        rawMachineLogs.forEach((ml: any) => {
+          const pId = ml.projectId?.toString();
+          if (!mLogsByProject.has(pId)) mLogsByProject.set(pId, []);
+          mLogsByProject.get(pId).push({
+            ...ml,
+            machine: ml.machineId ? { name: machineMap.get(ml.machineId.toString()) || 'Machine' } : null
+          });
+        });
+
+        const pLogsByProject = new Map();
+        rawProdLogs.forEach((pl: any) => {
+          const pId = pl.projectId?.toString();
+          if (!pLogsByProject.has(pId)) pLogsByProject.set(pId, []);
+          pLogsByProject.get(pId).push(pl);
+        });
+
+        const formattedWorkOrders = rawProjects.map((p: any) => {
+          const pId = p._id.toString();
+          const pMachineLogs = mLogsByProject.get(pId) || [];
+          const pProdLogs = pLogsByProject.get(pId) || [];
+
+          let totalUsageTimeHours = 0;
+          let earliestStart = null as Date | null;
+          let latestEnd = null as Date | null;
+          const machinesUsed = new Set<string>();
+
+          pMachineLogs.forEach((log: any) => {
+            if (log.machine?.name) machinesUsed.add(log.machine.name);
+            const start = new Date(log.startTime);
+            const end = log.endTime ? new Date(log.endTime) : new Date();
+            if (!earliestStart || start < earliestStart) earliestStart = start;
+            if (!latestEnd || end > latestEnd) latestEnd = end;
+            const diffMs = end.getTime() - start.getTime();
+            totalUsageTimeHours += (diffMs / (1000 * 60 * 60));
+          });
+
+          const completedLogs = pProdLogs.filter((pl: any) => pl.status === 'completed');
+          const totalLogs = pProdLogs.length;
+          const statusText = totalLogs > 0 ? `${completedLogs.length}/${totalLogs} Stages Completed` : 'In Progress';
+
+          return {
+            id: pId,
+            projectId: p.projectId,
+            clientDemand: p.requirements || p.description || 'N/A',
+            machinesUsed: Array.from(machinesUsed).join(', ') || 'N/A',
+            startTime: earliestStart,
+            endTime: latestEnd,
+            dateRange: earliestStart && latestEnd ? `${earliestStart.toLocaleDateString()} - ${latestEnd.toLocaleDateString()}` : 'N/A',
+            totalUsageTime: totalUsageTimeHours.toFixed(2) + ' hours',
+            status: statusText,
+            progressPercentage: p.progressPercentage || 0
+          };
+        });
+
+        fastCache.set('prod_work_orders', formattedWorkOrders, 30);
+        return res.json(formattedWorkOrders);
+      } catch (mErr) {
+        console.warn('Mongoose active work orders query failed, falling back to Prisma:', mErr);
+      }
+    }
 
     const projects = await prisma.project.findMany({
       where: { status: 'work_order' },
@@ -511,22 +629,23 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
           project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
           machine: l.machineId ? machineMap.get(l.machineId.toString()) : null
         }));
+
+        fastCache.set('prod_pending_approvals', pendingLogs, 15);
+        return res.json(pendingLogs);
       } catch (err) {
         console.warn('Mongoose pending approvals query failed, falling back to Prisma:', err);
       }
     }
 
-    if (pendingLogs.length === 0) {
-      pendingLogs = await prisma.productionLog.findMany({
-        where: { approvalStatus: 'pending' },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          worker: { select: { name: true } },
-          project: { select: { name: true, projectId: true, clientName: true } },
-          machine: { select: { name: true } }
-        }
-      });
-    }
+    pendingLogs = await prisma.productionLog.findMany({
+      where: { approvalStatus: 'pending' },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        worker: { select: { name: true } },
+        project: { select: { name: true, projectId: true, clientName: true } },
+        machine: { select: { name: true } }
+      }
+    });
 
     fastCache.set('prod_pending_approvals', pendingLogs, 15);
     res.json(pendingLogs);

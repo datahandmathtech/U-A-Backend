@@ -99,13 +99,15 @@ router.get('/', authenticate, async (req, res) => {
             slabs: slabMap.get(pId) || []
           };
         });
+
+        fastCache.set('all_projects', enrichedProjects, 60);
+        return res.json(enrichedProjects);
       } catch (mErr) {
         console.warn('Mongoose project fetch failed, falling back to Prisma:', mErr);
       }
     }
 
-    if (enrichedProjects.length === 0) {
-      const projects = await prisma.project.findMany({
+    const projects = await prisma.project.findMany({
         orderBy: { createdAt: 'desc' },
         include: { 
           assignedTo: { select: { name: true } },
@@ -157,7 +159,6 @@ router.get('/', authenticate, async (req, res) => {
           clientHandle: projectData.clientHandle || projectData.assignedTo?.name
         };
       });
-    }
 
     fastCache.set('all_projects', enrichedProjects, 60);
     res.json(enrichedProjects);
@@ -542,7 +543,14 @@ router.get('/:id/materials', authenticate, async (req, res) => {
 
     if (db) {
       try {
-        const rawMaterials = await db.collection('ProjectMaterial').find({ projectId: String(id) }).sort({ addedAt: -1 }).toArray();
+        const pObjId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+        const rawMaterials = await db.collection('ProjectMaterial').find({
+          $or: [
+            { projectId: String(id) },
+            ...(pObjId ? [{ projectId: pObjId }] : [])
+          ]
+        }).sort({ addedAt: -1 }).toArray();
+        
         const invIds = rawMaterials.map((m: any) => m.inventoryId).filter(Boolean);
         const invObjIds = invIds.filter((invId: string) => mongoose.Types.ObjectId.isValid(invId)).map((invId: string) => new mongoose.Types.ObjectId(invId));
 
@@ -557,14 +565,14 @@ router.get('/:id/materials', authenticate, async (req, res) => {
 
         const enriched = rawMaterials.map((m: any) => ({
           id: m._id.toString(),
-          projectId: m.projectId,
-          inventoryId: m.inventoryId,
+          projectId: m.projectId ? m.projectId.toString() : String(id),
+          inventoryId: m.inventoryId ? m.inventoryId.toString() : null,
           quantity: m.quantity,
           cost: m.cost,
           addedAt: m.addedAt,
           createdAt: m.createdAt,
           updatedAt: m.updatedAt,
-          inventory: invMap.get(m.inventoryId) || null
+          inventory: m.inventoryId ? (invMap.get(m.inventoryId.toString()) || null) : null
         }));
         return res.json(enriched);
       } catch (mErr) {

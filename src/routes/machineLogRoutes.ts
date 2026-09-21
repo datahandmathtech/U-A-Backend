@@ -206,6 +206,58 @@ router.get('/daily-logs', authenticate, async (req, res) => {
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawLogs = await db.collection('MachineLog').find({
+          $or: [
+            { startTime: { $gte: startOfDay } },
+            { status: 'active' }
+          ]
+        }).sort({ startTime: -1 }).toArray();
+
+        const machineIds = Array.from(new Set(rawLogs.map((l: any) => l.machineId).filter(Boolean)));
+        const projectIds = Array.from(new Set(rawLogs.map((l: any) => l.projectId).filter(Boolean)));
+        const operatorIds = Array.from(new Set(rawLogs.map((l: any) => l.operatorId).filter(Boolean)));
+
+        const machineObjIds = machineIds.filter((id: any) => mongoose.Types.ObjectId.isValid(id)).map((id: any) => new mongoose.Types.ObjectId(id));
+        const projectObjIds = projectIds.filter((id: any) => mongoose.Types.ObjectId.isValid(id)).map((id: any) => new mongoose.Types.ObjectId(id));
+        const operatorObjIds = operatorIds.filter((id: any) => mongoose.Types.ObjectId.isValid(id)).map((id: any) => new mongoose.Types.ObjectId(id));
+
+        const [rawMachines, rawProjects, rawUsers] = await Promise.all([
+          db.collection('Machine').find({ $or: [{ _id: { $in: machineObjIds } }, { id: { $in: machineIds } }] }, { projection: { name: 1 } }).toArray(),
+          db.collection('Project').find({ $or: [{ _id: { $in: projectObjIds } }, { id: { $in: projectIds } }] }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray(),
+          db.collection('User').find({ $or: [{ _id: { $in: operatorObjIds } }, { id: { $in: operatorIds } }] }, { projection: { name: 1, staffId: 1 } }).toArray()
+        ]);
+
+        const machineMap = new Map();
+        rawMachines.forEach((m: any) => machineMap.set(m._id.toString(), { name: m.name }));
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const userMap = new Map();
+        rawUsers.forEach((u: any) => userMap.set(u._id.toString(), { name: u.name, staffId: u.staffId }));
+
+        const enrichedLogs = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          machineId: l.machineId ? l.machineId.toString() : null,
+          projectId: l.projectId ? l.projectId.toString() : null,
+          operatorId: l.operatorId ? l.operatorId.toString() : null,
+          machine: l.machineId ? machineMap.get(l.machineId.toString()) : null,
+          project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
+          operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
+        }));
+
+        return res.json(enrichedLogs);
+      } catch (mErr) {
+        console.warn('Mongoose daily machine logs query failed, falling back to Prisma:', mErr);
+      }
+    }
+
     const dailyLogs = await prisma.machineLog.findMany({
       where: { 
         OR: [
@@ -221,7 +273,8 @@ router.get('/daily-logs', authenticate, async (req, res) => {
       }
     });
     res.json(dailyLogs);
-  } catch (error) { console.error(error);
+  } catch (error) { 
+    console.error(error);
     res.status(500).json({ message: 'Server error fetching daily machine logs' });
   }
 });

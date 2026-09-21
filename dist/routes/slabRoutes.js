@@ -394,47 +394,47 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                     createdAt: s.createdAt,
                     pieces: pieceMap.get(s._id.toString()) || []
                 }));
+                fastCache_1.fastCache.set(cacheKey, slabs, 30);
+                return res.json(slabs);
             }
             catch (err) {
                 console.warn('Mongoose slab query failed, falling back to Prisma:', err);
             }
         }
-        if (slabs.length === 0) {
-            slabs = await index_1.prisma.slab.findMany({
-                where: { projectId: String(projectId) },
-                orderBy: { createdAt: 'asc' },
-                select: {
-                    id: true,
-                    projectId: true,
-                    name: true,
-                    size: true,
-                    cost: true,
-                    status: true,
-                    requiredStages: true,
-                    createdAt: true,
-                    pieces: {
-                        select: {
-                            id: true,
-                            pieceNumber: true,
-                            productName: true,
-                            size: true,
-                            stage: true,
-                            status: true,
-                            logs: {
-                                select: {
-                                    id: true,
-                                    stage: true,
-                                    status: true
-                                }
+        const prismaSlabs = await index_1.prisma.slab.findMany({
+            where: { projectId: String(projectId) },
+            orderBy: { createdAt: 'asc' },
+            select: {
+                id: true,
+                projectId: true,
+                name: true,
+                size: true,
+                cost: true,
+                status: true,
+                requiredStages: true,
+                createdAt: true,
+                pieces: {
+                    select: {
+                        id: true,
+                        pieceNumber: true,
+                        productName: true,
+                        size: true,
+                        stage: true,
+                        status: true,
+                        logs: {
+                            select: {
+                                id: true,
+                                stage: true,
+                                status: true
                             }
-                        },
-                        orderBy: { pieceNumber: 'asc' }
-                    }
+                        }
+                    },
+                    orderBy: { pieceNumber: 'asc' }
                 }
-            });
-        }
-        fastCache_1.fastCache.set(cacheKey, slabs, 60);
-        res.json(slabs);
+            }
+        });
+        fastCache_1.fastCache.set(cacheKey, prismaSlabs, 60);
+        res.json(prismaSlabs);
     }
     catch (error) {
         console.error('Error fetching slabs for project:', error);

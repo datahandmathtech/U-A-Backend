@@ -146,18 +146,18 @@ const mountRoutes = (prefix = '') => {
   app.use(`${prefix}/dashboard`, dashboardRoutes);
   app.use(`${prefix}/qa`, qaRoutes);
   app.use(`${prefix}/labor`, laborRoutes);
-  app.use(`${prefix}/machine-logs`, machineLogRoutes);
+  app.use([`${prefix}/machine-logs`, `${prefix}/machine_logs`], machineLogRoutes);
   app.use(`${prefix}/expenses`, expenseRoutes);
   app.use(`${prefix}/slabs`, slabRoutes);
   app.use(`${prefix}/electricity`, electricityRoutes);
   app.use(`${prefix}/closure`, closureRoutes);
-  app.use(`${prefix}/live-feed`, liveFeedRoutes);
+  app.use([`${prefix}/live-feed`, `${prefix}/live_feed`], liveFeedRoutes);
   app.use(`${prefix}/upload`, uploadRoutes);
   app.use(`${prefix}/drawings`, drawingRoutes);
   app.use(`${prefix}/slabs`, slabRoutes);
   app.use(`${prefix}/vendors`, vendorRoutes);
   app.use(`${prefix}/waste`, wasteRoutes);
-  app.use(`${prefix}/packing-items`, packingRoutes);
+  app.use([`${prefix}/packing-items`, `${prefix}/packing_items`], packingRoutes);
 };
 
 mountRoutes('/api');

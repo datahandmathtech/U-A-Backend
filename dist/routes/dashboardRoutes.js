@@ -67,6 +67,7 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                 console.warn('Could not establish dedicated Mongoose connection:', err);
             }
         }
+        let dbSuccess = false;
         if (db) {
             try {
                 [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
@@ -76,12 +77,13 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
                     db.collection('Expense').find(mongoExpenseFilter, { projection: { amount: 1 } }).toArray(),
                     db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
                 ]);
+                dbSuccess = true;
             }
             catch (mErr) {
                 console.warn('Mongoose dashboard query failed, falling back to Prisma:', mErr);
             }
         }
-        if (projects.length === 0 && invoices.length === 0) {
+        if (!dbSuccess) {
             [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
                 index_1.prisma.project.findMany({ where: prismaDateFilter, select: { status: true } }),
                 index_1.prisma.invoice.findMany({ where: prismaDateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),

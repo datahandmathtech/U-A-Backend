@@ -126,59 +126,59 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
     
     let user: any = null;
 
+    // 1. Direct High-Speed MongoDB Lookup First
     try {
-      // Fast lookup with 2.5s timeout on Prisma
-      user = await Promise.race([
-        prisma.user.findFirst({
-          where: {
-            OR: [
-              { email: cleanInput },
-              { email: lowerInput },
-              { staffId: cleanInput },
-              { staffId: lowerInput },
-              { name: cleanInput }
-            ]
-          }
-        }),
-        new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Prisma query timeout')), 2500))
-      ]);
-    } catch (pErr) {
-      console.warn('Prisma login lookup timed out or failed, using native MongoDB fallback:', pErr);
+      const mongoose = require('mongoose');
+      let db = mongoose.connection?.db;
+      if (!db || mongoose.connection.readyState !== 1) {
+        const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+        const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+        db = conn.db;
+      }
+      if (db) {
+        const rawUser = await db.collection('User').findOne({
+          $or: [
+            { email: cleanInput },
+            { email: lowerInput },
+            { staffId: cleanInput },
+            { staffId: lowerInput },
+            { name: cleanInput }
+          ]
+        });
+        if (rawUser) {
+          user = {
+            id: rawUser._id.toString(),
+            name: rawUser.name,
+            email: rawUser.email,
+            password: rawUser.password,
+            role: rawUser.role,
+            modulesAccess: rawUser.modulesAccess || []
+          };
+        }
+      }
+    } catch (mErr) {
+      console.warn('Mongoose login lookup error, checking Prisma fallback:', mErr);
     }
 
-    // Direct MongoDB fallback if Prisma did not return user
+    // 2. Prisma Fallback if Mongoose query did not find user
     if (!user) {
       try {
-        const mongoose = require('mongoose');
-        let db = mongoose.connection?.db;
-        if (!db || mongoose.connection.readyState !== 1) {
-          const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
-          const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
-          db = conn.db;
-        }
-        if (db) {
-          const rawUser = await db.collection('User').findOne({
-            $or: [
-              { email: cleanInput },
-              { email: lowerInput },
-              { staffId: cleanInput },
-              { staffId: lowerInput },
-              { name: cleanInput }
-            ]
-          });
-          if (rawUser) {
-            user = {
-              id: rawUser._id.toString(),
-              name: rawUser.name,
-              email: rawUser.email,
-              password: rawUser.password,
-              role: rawUser.role,
-              modulesAccess: rawUser.modulesAccess || []
-            };
-          }
-        }
-      } catch (mErr) {
-        console.error('Mongoose fallback also failed:', mErr);
+        user = await Promise.race([
+          prisma.user.findFirst({
+            where: {
+              OR: [
+                { email: cleanInput },
+                { email: lowerInput },
+                { staffId: cleanInput },
+                { staffId: lowerInput },
+                { name: cleanInput }
+              ]
+            }
+          }),
+          new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Prisma query timeout')), 2000))
+        ]);
+      } catch (pErr) {
+        console.warn('Prisma login lookup timed out:', pErr);
       }
     }
 

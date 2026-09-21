@@ -21,6 +21,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
         let inventory = [];
         let logsSinceStartOfFy = [];
+        let dbSuccess = false;
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
         if (db) {
@@ -72,12 +73,13 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     id: l._id.toString(),
                     createdAt: new Date(l.createdAt)
                 }));
+                dbSuccess = true;
             }
             catch (mErr) {
                 console.warn('Mongoose inventory fetch failed:', mErr);
             }
         }
-        if (inventory.length === 0) {
+        if (!dbSuccess) {
             const [prismaInv, prismaLogs] = await Promise.all([
                 index_1.prisma.inventory.findMany({
                     orderBy: { createdAt: 'desc' },

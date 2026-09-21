@@ -90,125 +90,130 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 rawProjects.forEach((p) => projectMap.set(p._id.toString(), { id: p._id.toString(), name: p.name, projectId: p.projectId, clientName: p.clientName }));
                 const userMap = new Map();
                 rawUsers.forEach((u) => userMap.set(u._id.toString(), { id: u._id.toString(), name: u.name, staffId: u.staffId, role: u.role, department: u.department }));
-                liveFeedLogs = rawLogs.map((l) => ({
-                    id: l._id.toString(),
-                    machineId: l.machineId ? l.machineId.toString() : null,
-                    projectId: l.projectId ? l.projectId.toString() : null,
-                    productId: l.productId ? l.productId.toString() : null,
-                    productName: l.productName,
-                    startTime: l.startTime,
-                    endTime: l.endTime,
-                    estimatedHours: l.estimatedHours,
-                    downtime: l.downtime,
-                    quantityProduced: l.quantityProduced,
-                    operatorId: l.operatorId ? l.operatorId.toString() : null,
-                    machinePhotoUrl: l.machinePhotoUrl,
-                    unitPhotoUrl: l.unitPhotoUrl,
-                    softwarePhotoUrl: l.softwarePhotoUrl,
-                    endMachinePhotoUrl: l.endMachinePhotoUrl,
-                    endUnitPhotoUrl: l.endUnitPhotoUrl,
-                    endSoftwarePhotoUrl: l.endSoftwarePhotoUrl,
-                    status: l.status,
-                    approvalStatus: l.approvalStatus,
-                    isCarryForward: l.isCarryForward,
-                    parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
-                    remarks: l.remarks,
-                    createdAt: l.createdAt,
-                    machine: l.machineId ? machineMap.get(l.machineId.toString()) : null,
-                    project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
-                    operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
-                }));
-                fastCache_1.fastCache.set(cacheKey, liveFeedLogs, 15);
-                return res.json(liveFeedLogs);
+                // Batch lookup root parent logs with Mongoose for true original start time
+                const parentIds = Array.from(new Set(rawLogs.map((l) => l.parentLogId).filter(Boolean)));
+                const rootParentsMap = new Map();
+                if (parentIds.length > 0) {
+                    const parentObjIds = parentIds.filter((pId) => mongoose.Types.ObjectId.isValid(pId)).map((pId) => new mongoose.Types.ObjectId(pId));
+                    const parentDocs = await db.collection('MachineLog').find({
+                        $or: [
+                            { _id: { $in: parentObjIds } },
+                            { id: { $in: parentIds } }
+                        ]
+                    }, { projection: { startTime: 1, parentLogId: 1, operatorId: 1 } }).toArray();
+                    parentDocs.forEach((p) => {
+                        const op = p.operatorId ? userMap.get(p.operatorId.toString()) : null;
+                        rootParentsMap.set(p._id.toString(), {
+                            id: p._id.toString(),
+                            startTime: p.startTime,
+                            parentLogId: p.parentLogId,
+                            operator: op
+                        });
+                    });
+                }
+                const enrichedLogs = rawLogs.map((l) => {
+                    const id = l._id.toString();
+                    const mId = l.machineId ? l.machineId.toString() : null;
+                    const pId = l.projectId ? l.projectId.toString() : null;
+                    const opId = l.operatorId ? l.operatorId.toString() : null;
+                    const parentId = l.parentLogId ? l.parentLogId.toString() : null;
+                    const rootParent = parentId ? rootParentsMap.get(parentId) : null;
+                    const operator = opId ? userMap.get(opId) : null;
+                    return {
+                        id,
+                        machineId: mId,
+                        projectId: pId,
+                        productId: l.productId ? l.productId.toString() : null,
+                        productName: l.productName,
+                        startTime: l.startTime,
+                        endTime: l.endTime,
+                        estimatedHours: l.estimatedHours,
+                        downtime: l.downtime,
+                        quantityProduced: l.quantityProduced,
+                        operatorId: opId,
+                        machinePhotoUrl: l.machinePhotoUrl,
+                        unitPhotoUrl: l.unitPhotoUrl,
+                        softwarePhotoUrl: l.softwarePhotoUrl,
+                        endMachinePhotoUrl: l.endMachinePhotoUrl,
+                        endUnitPhotoUrl: l.endUnitPhotoUrl,
+                        endSoftwarePhotoUrl: l.endSoftwarePhotoUrl,
+                        status: l.status,
+                        approvalStatus: l.approvalStatus,
+                        isCarryForward: l.isCarryForward,
+                        parentLogId: parentId,
+                        remarks: l.remarks,
+                        createdAt: l.createdAt,
+                        machine: mId ? machineMap.get(mId) : null,
+                        project: pId ? projectMap.get(pId) : null,
+                        operator,
+                        initialStartTime: rootParent?.startTime || l.startTime,
+                        initialOperator: rootParent?.operator || operator
+                    };
+                });
+                fastCache_1.fastCache.set(cacheKey, enrichedLogs, 15);
+                return res.json(enrichedLogs);
             }
             catch (err) {
                 console.warn('Mongoose live feed query failed, falling back to Prisma:', err);
             }
         }
-        if (liveFeedLogs.length === 0) {
-            liveFeedLogs = await index_1.prisma.machineLog.findMany({
-                where: dateWhere,
-                select: {
-                    id: true,
-                    machineId: true,
-                    projectId: true,
-                    productId: true,
-                    productName: true,
-                    startTime: true,
-                    endTime: true,
-                    estimatedHours: true,
-                    downtime: true,
-                    quantityProduced: true,
-                    operatorId: true,
-                    machinePhotoUrl: true,
-                    unitPhotoUrl: true,
-                    softwarePhotoUrl: true,
-                    endMachinePhotoUrl: true,
-                    endUnitPhotoUrl: true,
-                    endSoftwarePhotoUrl: true,
-                    status: true,
-                    approvalStatus: true,
-                    isCarryForward: true,
-                    parentLogId: true,
-                    remarks: true,
-                    createdAt: true,
-                    machine: {
-                        select: {
-                            id: true,
-                            name: true,
-                            type: true,
-                            status: true
-                        }
-                    },
-                    operator: {
-                        select: {
-                            id: true,
-                            name: true,
-                            staffId: true,
-                            role: true,
-                            department: true
-                        }
-                    },
-                    project: {
-                        select: {
-                            id: true,
-                            name: true,
-                            projectId: true,
-                            clientName: true
-                        }
+        // Prisma Fallback
+        const prismaLogs = await index_1.prisma.machineLog.findMany({
+            where: dateWhere,
+            select: {
+                id: true,
+                machineId: true,
+                projectId: true,
+                productId: true,
+                productName: true,
+                startTime: true,
+                endTime: true,
+                estimatedHours: true,
+                downtime: true,
+                quantityProduced: true,
+                operatorId: true,
+                machinePhotoUrl: true,
+                unitPhotoUrl: true,
+                softwarePhotoUrl: true,
+                endMachinePhotoUrl: true,
+                endUnitPhotoUrl: true,
+                endSoftwarePhotoUrl: true,
+                status: true,
+                approvalStatus: true,
+                isCarryForward: true,
+                parentLogId: true,
+                remarks: true,
+                createdAt: true,
+                machine: {
+                    select: {
+                        id: true,
+                        name: true,
+                        type: true,
+                        status: true
                     }
                 },
-                orderBy: { startTime: 'desc' }
-            });
-        }
-        // Batch lookup root parent logs to resolve true original First ON date & operator
-        const parentIds = Array.from(new Set(liveFeedLogs.map((l) => l.parentLogId).filter(Boolean)));
-        const rootParentsMap = new Map();
-        if (parentIds.length > 0) {
-            const parentLogs = await index_1.prisma.machineLog.findMany({
-                where: { id: { in: parentIds } },
-                select: {
-                    id: true,
-                    startTime: true,
-                    parentLogId: true,
-                    operator: { select: { id: true, name: true, staffId: true } }
+                operator: {
+                    select: {
+                        id: true,
+                        name: true,
+                        staffId: true,
+                        role: true,
+                        department: true
+                    }
+                },
+                project: {
+                    select: {
+                        id: true,
+                        name: true,
+                        projectId: true,
+                        clientName: true
+                    }
                 }
-            });
-            parentLogs.forEach((p) => rootParentsMap.set(p.id, p));
-        }
-        const enrichedLogs = liveFeedLogs.map((log) => {
-            let rootParent = log.parentLogId ? rootParentsMap.get(log.parentLogId) : null;
-            // If rootParent itself had a parent, look up or fallback
-            const initialStartTime = rootParent?.startTime || log.startTime;
-            const initialOperator = rootParent?.operator || log.operator;
-            return {
-                ...log,
-                initialStartTime,
-                initialOperator
-            };
+            },
+            orderBy: { startTime: 'desc' }
         });
-        fastCache_1.fastCache.set(cacheKey, enrichedLogs, 6);
-        res.json(enrichedLogs);
+        fastCache_1.fastCache.set(cacheKey, prismaLogs, 10);
+        res.json(prismaLogs);
     }
     catch (error) {
         console.error('Live Feed Error:', error);

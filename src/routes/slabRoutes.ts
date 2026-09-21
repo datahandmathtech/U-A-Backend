@@ -434,13 +434,15 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
           createdAt: s.createdAt,
           pieces: pieceMap.get(s._id.toString()) || []
         }));
+
+        fastCache.set(cacheKey, slabs, 30);
+        return res.json(slabs);
       } catch (err) {
         console.warn('Mongoose slab query failed, falling back to Prisma:', err);
       }
     }
 
-    if (slabs.length === 0) {
-      slabs = await prisma.slab.findMany({
+    const prismaSlabs = await prisma.slab.findMany({
         where: { projectId: String(projectId) },
         orderBy: { createdAt: 'asc' },
         select: {
@@ -472,10 +474,9 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
           }
         }
       });
-    }
 
-    fastCache.set(cacheKey, slabs, 60);
-    res.json(slabs);
+    fastCache.set(cacheKey, prismaSlabs, 60);
+    res.json(prismaSlabs);
   } catch (error) {
     console.error('Error fetching slabs for project:', error);
     res.status(500).json({ message: 'Server error fetching slabs' });

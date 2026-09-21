@@ -32,6 +32,7 @@ router.get('/', async (req, res) => {
         }
         let vendors = [];
         let allLogs = [];
+        let dbSuccess = false;
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
         if (db) {
@@ -44,12 +45,13 @@ router.get('/', async (req, res) => {
                 }).toArray();
                 vendors = rawVendors.map((v) => ({ ...v, id: v._id.toString() }));
                 allLogs = rawLogs.map((l) => ({ ...l, id: l._id.toString(), createdAt: new Date(l.createdAt) }));
+                dbSuccess = true;
             }
             catch (mErr) {
                 console.warn('Mongoose vendors fetch failed:', mErr);
             }
         }
-        if (vendors.length === 0) {
+        if (!dbSuccess) {
             vendors = await index_1.prisma.vendor.findMany({
                 where: { status: 'active' },
                 orderBy: { createdAt: 'desc' }

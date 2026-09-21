@@ -94,63 +94,63 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                         slabs: slabMap.get(pId) || []
                     };
                 });
+                fastCache_1.fastCache.set('all_projects', enrichedProjects, 60);
+                return res.json(enrichedProjects);
             }
             catch (mErr) {
                 console.warn('Mongoose project fetch failed, falling back to Prisma:', mErr);
             }
         }
-        if (enrichedProjects.length === 0) {
-            const projects = await index_1.prisma.project.findMany({
-                orderBy: { createdAt: 'desc' },
-                include: {
-                    assignedTo: { select: { name: true } },
-                    quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
-                    slabs: {
-                        select: {
-                            id: true,
-                            name: true,
-                            size: true,
-                            status: true,
-                            requiredStages: true,
-                            pieces: {
-                                select: {
-                                    id: true,
-                                    pieceNumber: true,
-                                    productName: true,
-                                    size: true,
-                                    stage: true,
-                                    status: true
-                                }
+        const projects = await index_1.prisma.project.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+                assignedTo: { select: { name: true } },
+                quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+                slabs: {
+                    select: {
+                        id: true,
+                        name: true,
+                        size: true,
+                        status: true,
+                        requiredStages: true,
+                        pieces: {
+                            select: {
+                                id: true,
+                                pieceNumber: true,
+                                productName: true,
+                                size: true,
+                                stage: true,
+                                status: true
                             }
                         }
                     }
                 }
-            });
-            enrichedProjects = projects.map(p => {
-                let calculatedTotalPieces = p.totalPieces || 0;
-                if (p.quotations && p.quotations.length > 0) {
-                    const firstQuote = p.quotations[0];
-                    if (firstQuote && firstQuote.products) {
-                        const products = firstQuote.products;
-                        if (Array.isArray(products) && products.length > 0) {
-                            const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
-                            if (sum > 0)
-                                calculatedTotalPieces = sum;
-                        }
+            }
+        });
+        enrichedProjects = projects.map(p => {
+            let calculatedTotalPieces = p.totalPieces || 0;
+            if (p.quotations && p.quotations.length > 0) {
+                const firstQuote = p.quotations[0];
+                if (firstQuote && firstQuote.products) {
+                    const products = firstQuote.products;
+                    if (Array.isArray(products) && products.length > 0) {
+                        const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+                        if (sum > 0)
+                            calculatedTotalPieces = sum;
                     }
                 }
-                const { quotations, ...projectData } = p;
-                return {
-                    ...projectData,
-                    products: p.quotations?.[0]?.products || [],
-                    slabs: p.slabs || [],
-                    totalPieces: calculatedTotalPieces,
-                    completedPieces: projectData.completedPieces || 0,
-                    deliveryDate: projectData.deadline || projectData.deliveryDate,
-                    clientHandle: projectData.clientHandle || projectData.assignedTo?.name
-                };
-            });
-        }
+            }
+            const { quotations, ...projectData } = p;
+            return {
+                ...projectData,
+                products: p.quotations?.[0]?.products || [],
+                slabs: p.slabs || [],
+                totalPieces: calculatedTotalPieces,
+                completedPieces: projectData.completedPieces || 0,
+                deliveryDate: projectData.deadline || projectData.deliveryDate,
+                clientHandle: projectData.clientHandle || projectData.assignedTo?.name
+            };
+        });
         fastCache_1.fastCache.set('all_projects', enrichedProjects, 60);
         res.json(enrichedProjects);
     }
@@ -508,7 +508,13 @@ router.get('/:id/materials', authMiddleware_1.authenticate, async (req, res) => 
         let db = mongoose.connection?.db;
         if (db) {
             try {
-                const rawMaterials = await db.collection('ProjectMaterial').find({ projectId: String(id) }).sort({ addedAt: -1 }).toArray();
+                const pObjId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+                const rawMaterials = await db.collection('ProjectMaterial').find({
+                    $or: [
+                        { projectId: String(id) },
+                        ...(pObjId ? [{ projectId: pObjId }] : [])
+                    ]
+                }).sort({ addedAt: -1 }).toArray();
                 const invIds = rawMaterials.map((m) => m.inventoryId).filter(Boolean);
                 const invObjIds = invIds.filter((invId) => mongoose.Types.ObjectId.isValid(invId)).map((invId) => new mongoose.Types.ObjectId(invId));
                 const rawInvs = await db.collection('Inventory').find({
@@ -521,14 +527,14 @@ router.get('/:id/materials', authMiddleware_1.authenticate, async (req, res) => 
                 rawInvs.forEach((inv) => invMap.set(inv._id.toString(), { ...inv, id: inv._id.toString() }));
                 const enriched = rawMaterials.map((m) => ({
                     id: m._id.toString(),
-                    projectId: m.projectId,
-                    inventoryId: m.inventoryId,
+                    projectId: m.projectId ? m.projectId.toString() : String(id),
+                    inventoryId: m.inventoryId ? m.inventoryId.toString() : null,
                     quantity: m.quantity,
                     cost: m.cost,
                     addedAt: m.addedAt,
                     createdAt: m.createdAt,
                     updatedAt: m.updatedAt,
-                    inventory: invMap.get(m.inventoryId) || null
+                    inventory: m.inventoryId ? (invMap.get(m.inventoryId.toString()) || null) : null
                 }));
                 return res.json(enriched);
             }

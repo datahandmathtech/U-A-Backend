@@ -24,18 +24,18 @@ router.get('/', async (req, res) => {
                     createdAt: u.createdAt,
                     updatedAt: u.updatedAt
                 }));
+                fastCache_1.fastCache.set('all_units', units, 300);
+                return res.json(units);
             }
             catch (err) {
-                console.warn('Mongoose unit query failed:', err);
+                console.warn('Mongoose unit query failed, falling back to Prisma:', err);
             }
         }
-        if (units.length === 0) {
-            units = await index_1.prisma.unitCategory.findMany({
-                orderBy: { name: 'asc' }
-            });
-        }
-        fastCache_1.fastCache.set('all_units', units, 300);
-        res.json(units);
+        const prismaUnits = await index_1.prisma.unitCategory.findMany({
+            orderBy: { name: 'asc' }
+        });
+        fastCache_1.fastCache.set('all_units', prismaUnits, 300);
+        res.json(prismaUnits);
     }
     catch (error) {
         res.status(500).json({ message: 'Server error fetching units' });
