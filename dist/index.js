@@ -33,11 +33,6 @@ exports.prisma = globalForPrisma.prisma ||
     });
 globalForPrisma.prisma = exports.prisma;
 const mongoose_1 = __importDefault(require("mongoose"));
-mongoose_1.default.connect(effectiveDbUrl).then(() => {
-    console.log('MongoDB (Mongoose) connected successfully');
-}).catch((err) => {
-    console.error('MongoDB connection error:', err.message);
-});
 // Middleware
 app.use((0, compression_1.default)());
 app.use((0, cors_1.default)());
@@ -258,16 +253,29 @@ app.use((req, res) => {
     }
 });
 process.on('uncaughtException', (err) => {
-    console.error('[FATAL CRASH PREVENTED] Uncaught Exception:', err);
+    console.error('[FATAL CRASH] Uncaught Exception:', err);
+    process.exit(1);
 });
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('[FATAL CRASH PREVENTED] Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('[FATAL CRASH] Unhandled Rejection at:', promise, 'reason:', reason);
+    process.exit(1);
 });
 const cronJobs_1 = require("./utils/cronJobs");
 // Start Server
-app.listen(Number(port), '0.0.0.0', () => {
-    console.log(`Server is running on port ${port}`);
-    (0, cronJobs_1.initCronJobs)();
-    console.log('Cron jobs initialized');
-});
+const startServer = async () => {
+    try {
+        // Wait for Mongoose to connect before starting the server so db.collection is ready
+        await mongoose_1.default.connect(effectiveDbUrl);
+        console.log('MongoDB (Mongoose) connected successfully');
+    }
+    catch (err) {
+        console.error('MongoDB connection error during startup:', err.message);
+    }
+    app.listen(port, () => {
+        console.log(`Server is running on port ${port}`);
+        (0, cronJobs_1.initCronJobs)();
+        console.log('Cron jobs initialized');
+    });
+};
+startServer();
 //# sourceMappingURL=index.js.map
