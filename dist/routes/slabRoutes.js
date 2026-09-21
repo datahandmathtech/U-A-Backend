@@ -230,38 +230,89 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
-        const slabs = await index_1.prisma.slab.findMany({
-            where: { projectId: String(projectId) },
-            orderBy: { createdAt: 'asc' },
-            select: {
-                id: true,
-                projectId: true,
-                name: true,
-                size: true,
-                cost: true,
-                status: true,
-                requiredStages: true,
-                createdAt: true,
-                pieces: {
-                    select: {
-                        id: true,
-                        pieceNumber: true,
-                        productName: true,
-                        size: true,
-                        stage: true,
-                        status: true,
-                        logs: {
-                            select: {
-                                id: true,
-                                stage: true,
-                                status: true
-                            }
-                        }
-                    },
-                    orderBy: { pieceNumber: 'asc' }
-                }
+        let slabs = [];
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (!db || mongoose.connection.readyState !== 1) {
+            try {
+                const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+                const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+                db = conn.db;
             }
-        });
+            catch (err) {
+                console.warn('Could not establish dedicated Mongoose connection:', err);
+            }
+        }
+        if (db) {
+            try {
+                const rawSlabs = await db.collection('Slab').find({ projectId: String(projectId) }).sort({ createdAt: 1 }).toArray();
+                const slabIds = rawSlabs.map((s) => s._id.toString());
+                const rawPieces = await db.collection('Piece').find({ slabId: { $in: slabIds } }).sort({ pieceNumber: 1 }).toArray();
+                const pieceMap = new Map();
+                rawPieces.forEach((p) => {
+                    const pObj = {
+                        id: p._id.toString(),
+                        pieceNumber: p.pieceNumber,
+                        productName: p.productName,
+                        size: p.size,
+                        stage: p.stage,
+                        status: p.status,
+                        logs: p.logs || []
+                    };
+                    if (!pieceMap.has(p.slabId))
+                        pieceMap.set(p.slabId, []);
+                    pieceMap.get(p.slabId).push(pObj);
+                });
+                slabs = rawSlabs.map((s) => ({
+                    id: s._id.toString(),
+                    projectId: s.projectId,
+                    name: s.name,
+                    size: s.size,
+                    cost: s.cost,
+                    status: s.status,
+                    requiredStages: s.requiredStages,
+                    createdAt: s.createdAt,
+                    pieces: pieceMap.get(s._id.toString()) || []
+                }));
+            }
+            catch (err) {
+                console.warn('Mongoose slab query failed, falling back to Prisma:', err);
+            }
+        }
+        if (slabs.length === 0) {
+            slabs = await index_1.prisma.slab.findMany({
+                where: { projectId: String(projectId) },
+                orderBy: { createdAt: 'asc' },
+                select: {
+                    id: true,
+                    projectId: true,
+                    name: true,
+                    size: true,
+                    cost: true,
+                    status: true,
+                    requiredStages: true,
+                    createdAt: true,
+                    pieces: {
+                        select: {
+                            id: true,
+                            pieceNumber: true,
+                            productName: true,
+                            size: true,
+                            stage: true,
+                            status: true,
+                            logs: {
+                                select: {
+                                    id: true,
+                                    stage: true,
+                                    status: true
+                                }
+                            }
+                        },
+                        orderBy: { pieceNumber: 'asc' }
+                    }
+                }
+            });
+        }
         fastCache_1.fastCache.set(cacheKey, slabs, 60);
         res.json(slabs);
     }

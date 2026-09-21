@@ -7,10 +7,43 @@ export async function autoSplitActiveMachineLogs() {
   isSplitting = true;
 
   try {
-    // Find all active logs
-    const activeLogs = await prisma.machineLog.findMany({
-      where: { status: 'active' }
-    });
+    let activeLogs: any[] = [];
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db && mongoose.connection.readyState === 1) {
+      try {
+        const raw = await db.collection('MachineLog').find({ status: 'active' }).toArray();
+        activeLogs = raw.map((l: any) => ({
+          id: l._id.toString(),
+          machineId: l.machineId,
+          projectId: l.projectId,
+          productId: l.productId,
+          productName: l.productName,
+          startTime: l.startTime,
+          endTime: l.endTime,
+          estimatedHours: l.estimatedHours,
+          quantityProduced: l.quantityProduced,
+          operatorId: l.operatorId,
+          machinePhotoUrl: l.machinePhotoUrl,
+          unitPhotoUrl: l.unitPhotoUrl,
+          softwarePhotoUrl: l.softwarePhotoUrl,
+          status: l.status,
+          approvalStatus: l.approvalStatus,
+          isCarryForward: l.isCarryForward,
+          parentLogId: l.parentLogId,
+          remarks: l.remarks
+        }));
+      } catch (err) {
+        console.warn('Mongoose autoSplit active logs fetch failed:', err);
+      }
+    }
+
+    if (activeLogs.length === 0) {
+      activeLogs = await prisma.machineLog.findMany({
+        where: { status: 'active' }
+      });
+    }
 
     const now = new Date();
     const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5 hours 30 mins (Asia/Kolkata)

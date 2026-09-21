@@ -432,15 +432,65 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
     const cached = fastCache.get('prod_pending_approvals');
     if (cached) return res.json(cached);
 
-    const pendingLogs = await prisma.productionLog.findMany({
-      where: { approvalStatus: 'pending' },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        worker: { select: { name: true } },
-        project: { select: { name: true, projectId: true, clientName: true } },
-        machine: { select: { name: true } }
+    let pendingLogs: any[] = [];
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (!db || mongoose.connection.readyState !== 1) {
+      try {
+        const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
+        const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
+        db = conn.db;
+      } catch (err) {
+        console.warn('Could not establish dedicated Mongoose connection:', err);
       }
-    });
+    }
+
+    if (db) {
+      try {
+        const rawLogs = await db.collection('ProductionLog').find({ approvalStatus: 'pending' }).sort({ createdAt: -1 }).toArray();
+        const workerIds = rawLogs.map((l: any) => l.workerId).filter(Boolean);
+        const projectIds = rawLogs.map((l: any) => l.projectId).filter(Boolean);
+        const machineIds = rawLogs.map((l: any) => l.machineId).filter(Boolean);
+
+        const [rawWorkers, rawProjects, rawMachines] = await Promise.all([
+          db.collection('User').find({ _id: { $in: workerIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }).toArray(),
+          db.collection('Project').find({ _id: { $in: projectIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }).toArray(),
+          db.collection('Machine').find({ _id: { $in: machineIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }).toArray()
+        ]);
+
+        const workerMap = new Map();
+        rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name }));
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const machineMap = new Map();
+        rawMachines.forEach((m: any) => machineMap.set(m._id.toString(), { name: m.name }));
+
+        pendingLogs = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          worker: l.workerId ? workerMap.get(l.workerId.toString()) : null,
+          project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
+          machine: l.machineId ? machineMap.get(l.machineId.toString()) : null
+        }));
+      } catch (err) {
+        console.warn('Mongoose pending approvals query failed, falling back to Prisma:', err);
+      }
+    }
+
+    if (pendingLogs.length === 0) {
+      pendingLogs = await prisma.productionLog.findMany({
+        where: { approvalStatus: 'pending' },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          worker: { select: { name: true } },
+          project: { select: { name: true, projectId: true, clientName: true } },
+          machine: { select: { name: true } }
+        }
+      });
+    }
 
     fastCache.set('prod_pending_approvals', pendingLogs, 15);
     res.json(pendingLogs);
