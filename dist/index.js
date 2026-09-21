@@ -33,11 +33,28 @@ exports.prisma = globalForPrisma.prisma ||
     });
 globalForPrisma.prisma = exports.prisma;
 const mongoose_1 = __importDefault(require("mongoose"));
+mongoose_1.default.connect(effectiveDbUrl).then(() => {
+    console.log('MongoDB (Mongoose) connected successfully');
+}).catch((err) => {
+    console.error('MongoDB connection error:', err.message);
+});
 // Middleware
 app.use((0, compression_1.default)());
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
+// Middleware to ensure Mongoose is connected before handling API requests
+app.use(async (req, res, next) => {
+    if (req.path.startsWith('/api') && mongoose_1.default.connection.readyState !== 1) {
+        try {
+            await mongoose_1.default.connection.asPromise();
+        }
+        catch (error) {
+            console.error('Mongoose connection failed in middleware:', error);
+        }
+    }
+    next();
+});
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const leadRoutes_1 = __importDefault(require("./routes/leadRoutes"));
 const projectRoutes_1 = __importDefault(require("./routes/projectRoutes"));
@@ -262,20 +279,9 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 const cronJobs_1 = require("./utils/cronJobs");
 // Start Server
-const startServer = async () => {
-    try {
-        // Wait for Mongoose to connect before starting the server so db.collection is ready
-        await mongoose_1.default.connect(effectiveDbUrl);
-        console.log('MongoDB (Mongoose) connected successfully');
-    }
-    catch (err) {
-        console.error('MongoDB connection error during startup:', err.message);
-    }
-    app.listen(port, () => {
-        console.log(`Server is running on port ${port}`);
-        (0, cronJobs_1.initCronJobs)();
-        console.log('Cron jobs initialized');
-    });
-};
-startServer();
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+    (0, cronJobs_1.initCronJobs)();
+    console.log('Cron jobs initialized');
+});
 //# sourceMappingURL=index.js.map

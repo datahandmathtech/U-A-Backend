@@ -36,12 +36,29 @@ export const prisma =
 globalForPrisma.prisma = prisma;
 
 import mongoose from 'mongoose';
+mongoose.connect(effectiveDbUrl).then(() => {
+  console.log('MongoDB (Mongoose) connected successfully');
+}).catch((err) => {
+  console.error('MongoDB connection error:', err.message);
+});
 
 // Middleware
 app.use(compression());
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Middleware to ensure Mongoose is connected before handling API requests
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api') && mongoose.connection.readyState !== 1) {
+    try {
+      await mongoose.connection.asPromise();
+    } catch (error) {
+      console.error('Mongoose connection failed in middleware:', error);
+    }
+  }
+  next();
+});
 
 import authRoutes from './routes/authRoutes';
 import leadRoutes from './routes/leadRoutes';
@@ -287,20 +304,8 @@ process.on('unhandledRejection', (reason, promise) => {
 import { initCronJobs } from './utils/cronJobs';
 
 // Start Server
-const startServer = async () => {
-  try {
-    // Wait for Mongoose to connect before starting the server so db.collection is ready
-    await mongoose.connect(effectiveDbUrl);
-    console.log('MongoDB (Mongoose) connected successfully');
-  } catch (err: any) {
-    console.error('MongoDB connection error during startup:', err.message);
-  }
-
-  app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
-    initCronJobs();
-    console.log('Cron jobs initialized');
-  });
-};
-
-startServer();
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
+  initCronJobs();
+  console.log('Cron jobs initialized');
+});
