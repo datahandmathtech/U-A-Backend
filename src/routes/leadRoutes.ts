@@ -11,6 +11,32 @@ router.get('/', authenticate, async (req, res) => {
     const cached = fastCache.get('all_leads');
     if (cached) return res.json(cached);
 
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawLeads = await db.collection('Lead').find({}).sort({ createdAt: -1 }).toArray();
+        const userIds = rawLeads.map((l: any) => l.assignedToId).filter(Boolean);
+        const userObjIds = userIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id)).map((id: string) => new mongoose.Types.ObjectId(id));
+
+        const rawUsers = await db.collection('User').find({ $or: [{ _id: { $in: userObjIds } }, { id: { $in: userIds } }] }, { projection: { name: 1 } }).toArray();
+        const userMap = new Map();
+        rawUsers.forEach((u: any) => userMap.set(u._id.toString(), { name: u.name }));
+
+        const enriched = rawLeads.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          assignedTo: l.assignedToId ? userMap.get(l.assignedToId) || null : null
+        }));
+
+        fastCache.set('all_leads', enriched, 120);
+        return res.json(enriched);
+      } catch (mErr) {
+        console.warn('Mongoose lead fetch failed:', mErr);
+      }
+    }
+
     const leads = await prisma.lead.findMany({
       orderBy: { createdAt: 'desc' },
       include: { assignedTo: { select: { name: true } } }

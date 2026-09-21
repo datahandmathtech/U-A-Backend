@@ -11,6 +11,28 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         const cached = fastCache_1.fastCache.get('all_invoices');
         if (cached)
             return res.json(cached);
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const rawInvoices = await db.collection('Invoice').find({}).sort({ createdAt: -1 }).toArray();
+                const projIds = rawInvoices.map((i) => i.projectId).filter(Boolean);
+                const projObjIds = projIds.filter((pId) => mongoose.Types.ObjectId.isValid(pId)).map((pId) => new mongoose.Types.ObjectId(pId));
+                const rawProjects = await db.collection('Project').find({ $or: [{ _id: { $in: projObjIds } }, { id: { $in: projIds } }] }, { projection: { name: 1, projectId: 1 } }).toArray();
+                const projMap = new Map();
+                rawProjects.forEach((p) => projMap.set(p._id.toString(), { projectId: p.projectId, name: p.name }));
+                const enriched = rawInvoices.map((inv) => ({
+                    ...inv,
+                    id: inv._id.toString(),
+                    project: inv.projectId ? projMap.get(inv.projectId) || null : null
+                }));
+                fastCache_1.fastCache.set('all_invoices', enriched, 120);
+                return res.json(enriched);
+            }
+            catch (mErr) {
+                console.warn('Mongoose invoices fetch failed:', mErr);
+            }
+        }
         const invoices = await index_1.prisma.invoice.findMany({
             orderBy: { createdAt: 'desc' },
             include: { project: { select: { projectId: true, name: true } } }

@@ -12,41 +12,110 @@ router.get('/', authenticate, async (req, res) => {
     const cacheKey = `all_inventory_${fyYear || 'current'}`;
     const cached = fastCache.get(cacheKey);
     if (cached) return res.json(cached);
-    
+
     // Determine Financial Year start and end dates
     const now = new Date();
     let currentFyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
     const selectedFyYear = fyYear ? parseInt(fyYear as string, 10) : currentFyYear;
-    
+
     const startOfFy = new Date(selectedFyYear, 3, 1); // April 1st
     const endOfFy = new Date(selectedFyYear + 1, 2, 31, 23, 59, 59, 999); // March 31st
 
-    const [inventory, logsSinceStartOfFy] = await Promise.all([
-      prisma.inventory.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: {
-          projectMaterials: {
-            include: {
-              project: {
-                select: { id: true, name: true, projectId: true, clientName: true }
+    let inventory: any[] = [];
+    let logsSinceStartOfFy: any[] = [];
+
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const [rawInvs, rawLogs] = await Promise.all([
+          db.collection('Inventory').find({}).sort({ createdAt: -1 }).toArray(),
+          db.collection('InventoryLog').find({ createdAt: { $gte: startOfFy } }, { projection: { inventoryId: true, type: true, quantity: true, createdAt: true } }).toArray()
+        ]);
+
+        const invIds = rawInvs.map((i: any) => i._id.toString());
+        const [rawMats, rawSlabs] = await Promise.all([
+          db.collection('ProjectMaterial').find({ inventoryId: { $in: invIds } }).toArray(),
+          db.collection('Slab').find({ inventoryId: { $in: invIds } }).toArray()
+        ]);
+
+        const allProjIds = Array.from(new Set([...rawMats.map((m: any) => m.projectId), ...rawSlabs.map((s: any) => s.projectId)].filter(Boolean)));
+        const projObjIds = allProjIds.filter((pId: string) => mongoose.Types.ObjectId.isValid(pId)).map((pId: string) => new mongoose.Types.ObjectId(pId));
+
+        const rawProjects = await db.collection('Project').find({ $or: [{ _id: { $in: projObjIds } }, { id: { $in: allProjIds } }] }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray();
+        const projMap = new Map();
+        rawProjects.forEach((p: any) => projMap.set(p._id.toString(), { id: p._id.toString(), name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const matMap = new Map();
+        rawMats.forEach((m: any) => {
+          if (!matMap.has(m.inventoryId)) matMap.set(m.inventoryId, []);
+          matMap.get(m.inventoryId).push({
+            id: m._id.toString(),
+            projectId: m.projectId,
+            quantity: m.quantity,
+            project: projMap.get(m.projectId) || null
+          });
+        });
+
+        const slabMap = new Map();
+        rawSlabs.forEach((s: any) => {
+          if (!slabMap.has(s.inventoryId)) slabMap.set(s.inventoryId, []);
+          slabMap.get(s.inventoryId).push({
+            id: s._id.toString(),
+            name: s.name,
+            projectId: s.projectId,
+            project: projMap.get(s.projectId) || null
+          });
+        });
+
+        inventory = rawInvs.map((inv: any) => ({
+          ...inv,
+          id: inv._id.toString(),
+          projectMaterials: matMap.get(inv._id.toString()) || [],
+          slabs: slabMap.get(inv._id.toString()) || []
+        }));
+
+        logsSinceStartOfFy = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          createdAt: new Date(l.createdAt)
+        }));
+      } catch (mErr) {
+        console.warn('Mongoose inventory fetch failed:', mErr);
+      }
+    }
+
+    if (inventory.length === 0) {
+      const [prismaInv, prismaLogs] = await Promise.all([
+        prisma.inventory.findMany({
+          orderBy: { createdAt: 'desc' },
+          include: {
+            projectMaterials: {
+              include: {
+                project: {
+                  select: { id: true, name: true, projectId: true, clientName: true }
+                }
               }
-            }
-          },
-          slabs: {
-            include: {
-              project: {
-                select: { id: true, name: true, projectId: true, clientName: true }
+            },
+            slabs: {
+              include: {
+                project: {
+                  select: { id: true, name: true, projectId: true, clientName: true }
+                }
               }
             }
           }
-        }
-      }),
-      prisma.inventoryLog.findMany({
-        where: { createdAt: { gte: startOfFy } },
-        select: { inventoryId: true, type: true, quantity: true, createdAt: true }
-      })
-    ]);
-    
+        }),
+        prisma.inventoryLog.findMany({
+          where: { createdAt: { gte: startOfFy } },
+          select: { inventoryId: true, type: true, quantity: true, createdAt: true }
+        })
+      ]);
+      inventory = prismaInv;
+      logsSinceStartOfFy = prismaLogs;
+    }
+
     // Fast O(1) aggregation Maps
     const netChangeMap = new Map<string, number>();
     const inQtyMap = new Map<string, number>();

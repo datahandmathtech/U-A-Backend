@@ -15,10 +15,6 @@ router.get('/', async (req, res) => {
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
-        const vendors = await index_1.prisma.vendor.findMany({
-            where: { status: 'active' },
-            orderBy: { createdAt: 'desc' }
-        });
         const today = new Date();
         let startOfFY, endOfFY;
         if (fy && typeof fy === 'string' && fy !== 'undefined') {
@@ -34,12 +30,37 @@ router.get('/', async (req, res) => {
             startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
             endOfFY = new Date(`${currentYear + 1}-03-31T23:59:59.999Z`);
         }
-        const allLogs = await index_1.prisma.productionLog.findMany({
-            where: {
-                vendorId: { in: vendors.map(v => v.id) },
-                createdAt: { gte: startOfFY, lte: endOfFY }
+        let vendors = [];
+        let allLogs = [];
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const rawVendors = await db.collection('Vendor').find({ status: 'active' }).sort({ createdAt: -1 }).toArray();
+                const vendorIds = rawVendors.map((v) => v._id.toString());
+                const rawLogs = await db.collection('ProductionLog').find({
+                    vendorId: { $in: vendorIds },
+                    createdAt: { $gte: startOfFY, $lte: endOfFY }
+                }).toArray();
+                vendors = rawVendors.map((v) => ({ ...v, id: v._id.toString() }));
+                allLogs = rawLogs.map((l) => ({ ...l, id: l._id.toString(), createdAt: new Date(l.createdAt) }));
             }
-        });
+            catch (mErr) {
+                console.warn('Mongoose vendors fetch failed:', mErr);
+            }
+        }
+        if (vendors.length === 0) {
+            vendors = await index_1.prisma.vendor.findMany({
+                where: { status: 'active' },
+                orderBy: { createdAt: 'desc' }
+            });
+            allLogs = await index_1.prisma.productionLog.findMany({
+                where: {
+                    vendorId: { in: vendors.map(v => v.id) },
+                    createdAt: { gte: startOfFY, lte: endOfFY }
+                }
+            });
+        }
         const vendorStats = vendors.map((vendor) => {
             const logs = allLogs.filter(log => log.vendorId === vendor.id);
             let filteredLogs = logs;

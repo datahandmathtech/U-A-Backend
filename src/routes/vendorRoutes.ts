@@ -12,11 +12,6 @@ router.get('/', async (req, res) => {
     const cached = fastCache.get(cacheKey);
     if (cached) return res.json(cached);
 
-    const vendors = await prisma.vendor.findMany({
-      where: { status: 'active' },
-      orderBy: { createdAt: 'desc' }
-    });
-
     const today = new Date();
     let startOfFY, endOfFY;
 
@@ -33,12 +28,41 @@ router.get('/', async (req, res) => {
       endOfFY = new Date(`${currentYear + 1}-03-31T23:59:59.999Z`);
     }
 
-    const allLogs = await prisma.productionLog.findMany({
-      where: {
-        vendorId: { in: vendors.map(v => v.id) },
-        createdAt: { gte: startOfFY, lte: endOfFY }
+    let vendors: any[] = [];
+    let allLogs: any[] = [];
+
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawVendors = await db.collection('Vendor').find({ status: 'active' }).sort({ createdAt: -1 }).toArray();
+        const vendorIds = rawVendors.map((v: any) => v._id.toString());
+        const rawLogs = await db.collection('ProductionLog').find({
+          vendorId: { $in: vendorIds },
+          createdAt: { $gte: startOfFY, $lte: endOfFY }
+        }).toArray();
+
+        vendors = rawVendors.map((v: any) => ({ ...v, id: v._id.toString() }));
+        allLogs = rawLogs.map((l: any) => ({ ...l, id: l._id.toString(), createdAt: new Date(l.createdAt) }));
+      } catch (mErr) {
+        console.warn('Mongoose vendors fetch failed:', mErr);
       }
-    });
+    }
+
+    if (vendors.length === 0) {
+      vendors = await prisma.vendor.findMany({
+        where: { status: 'active' },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      allLogs = await prisma.productionLog.findMany({
+        where: {
+          vendorId: { in: vendors.map(v => v.id) },
+          createdAt: { gte: startOfFY, lte: endOfFY }
+        }
+      });
+    }
 
     const vendorStats = vendors.map((vendor) => {
       const logs = allLogs.filter(log => log.vendorId === vendor.id);

@@ -8,12 +8,37 @@ const router = Router();
 // Get attendances
 router.get('/attendance', authenticate, async (req, res) => {
   try {
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawRecords = await db.collection('Attendance').find({}).sort({ date: -1, checkIn: -1 }).limit(500).toArray();
+        const userIds = rawRecords.map((r: any) => r.userId).filter(Boolean);
+        const userObjIds = userIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id)).map((id: string) => new mongoose.Types.ObjectId(id));
+
+        const rawUsers = await db.collection('User').find({ $or: [{ _id: { $in: userObjIds } }, { id: { $in: userIds } }] }, { projection: { name: 1, department: 1 } }).toArray();
+        const userMap = new Map();
+        rawUsers.forEach((u: any) => userMap.set(u._id.toString(), { name: u.name, department: u.department }));
+
+        const enriched = rawRecords.map((r: any) => ({
+          ...r,
+          id: r._id.toString(),
+          user: r.userId ? userMap.get(r.userId) || null : null
+        }));
+        return res.json(enriched);
+      } catch (mErr) {
+        console.warn('Mongoose attendance fetch failed:', mErr);
+      }
+    }
+
     const records = await prisma.attendance.findMany({
       orderBy: { date: 'desc' },
       include: { user: { select: { name: true, department: true } } }
     });
     res.json(records);
-  } catch (error) { console.error(error);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ message: 'Server error fetching attendance' });
   }
 });
@@ -181,6 +206,65 @@ router.post('/attendance/manual', authenticate, async (req, res) => {
 // Get staff salary calculation
 router.get('/staff-salary', authenticate, async (req, res) => {
   try {
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawWorkers = await db.collection('User').find({ role: 'worker' }).toArray();
+        const workerIds = rawWorkers.map((w: any) => w._id.toString());
+        const workerObjIds = workerIds.filter((id: string) => mongoose.Types.ObjectId.isValid(id)).map((id: string) => new mongoose.Types.ObjectId(id));
+
+        const [rawAtts, rawProdLogs] = await Promise.all([
+          db.collection('Attendance').find({ $or: [{ userId: { $in: workerIds } }, { userId: { $in: workerObjIds } }], checkOut: { $ne: null } }).toArray(),
+          db.collection('ProductionLog').find({ $or: [{ workerId: { $in: workerIds } }, { workerId: { $in: workerObjIds } }], status: 'completed' }).toArray()
+        ]);
+
+        const attMap = new Map();
+        rawAtts.forEach((a: any) => {
+          const uId = a.userId?.toString();
+          if (!attMap.has(uId)) attMap.set(uId, []);
+          attMap.get(uId).push(a);
+        });
+
+        const prodMap = new Map();
+        rawProdLogs.forEach((p: any) => {
+          const wId = p.workerId?.toString();
+          if (!prodMap.has(wId)) prodMap.set(wId, []);
+          prodMap.get(wId).push(p);
+        });
+
+        const staffData = rawWorkers.map((user: any) => {
+          const uId = user._id.toString();
+          const userLogs = prodMap.get(uId) || [];
+          const userAtts = attMap.get(uId) || [];
+
+          const totalSqFt = userLogs.reduce((acc: number, log: any) => acc + (log.quantityProduced || 0), 0);
+          const pieceRateEarnings = totalSqFt * (user.pieceRate || 0);
+
+          let totalHours = 0;
+          userAtts.forEach((att: any) => {
+            if (att.checkIn && att.checkOut) {
+              totalHours += (new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / (1000 * 60 * 60);
+            }
+          });
+          const hourlyEarnings = totalHours * ((user.wage || 0) / 8);
+
+          return {
+            ...user,
+            id: uId,
+            totalSqFt,
+            totalHours: totalHours.toFixed(2),
+            estimatedSalary: pieceRateEarnings > 0 ? pieceRateEarnings : hourlyEarnings
+          };
+        });
+
+        return res.json(staffData);
+      } catch (mErr) {
+        console.warn('Mongoose staff-salary fetch failed:', mErr);
+      }
+    }
+
     const users = await prisma.user.findMany({
       where: { role: 'worker' },
       select: {
@@ -202,18 +286,16 @@ router.get('/staff-salary', authenticate, async (req, res) => {
     });
 
     const staffData = users.map(user => {
-      // Basic piece rate calculation
       const totalSqFt = user.productionLogs.reduce((acc, log) => acc + (log.quantityProduced || 0), 0);
       const pieceRateEarnings = totalSqFt * (user.pieceRate || 0);
-      
-      // Basic time-based calculation (simplified)
+
       let totalHours = 0;
       user.attendances.forEach(att => {
         if (att.checkIn && att.checkOut) {
           totalHours += (new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / (1000 * 60 * 60);
         }
       });
-      const hourlyEarnings = totalHours * ((user.wage || 0) / 8); // Assuming wage is daily for 8 hours
+      const hourlyEarnings = totalHours * ((user.wage || 0) / 8);
 
       return {
         ...user,
@@ -224,7 +306,8 @@ router.get('/staff-salary', authenticate, async (req, res) => {
     });
 
     res.json(staffData);
-  } catch (error) { console.error(error);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ message: 'Server error fetching staff salary' });
   }
 });
@@ -294,6 +377,18 @@ router.delete('/staff/:id', authenticate, async (req, res) => {
 // Get all staff (for management)
 router.get('/staff', authenticate, async (req, res) => {
   try {
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawUsers = await db.collection('User').find({}, { projection: { name: 1, email: 1, staffId: 1, role: 1, department: 1, modulesAccess: 1 } }).toArray();
+        return res.json(rawUsers.map((u: any) => ({ ...u, id: u._id.toString() })));
+      } catch (mErr) {
+        console.warn('Mongoose staff fetch failed:', mErr);
+      }
+    }
+
     const users = await prisma.user.findMany({
       select: { id: true, name: true, email: true, staffId: true, role: true, department: true, modulesAccess: true }
     });
