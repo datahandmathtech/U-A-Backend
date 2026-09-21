@@ -58,16 +58,16 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 rawUsers.forEach((u) => userMap.set(u._id.toString(), { id: u._id.toString(), name: u.name, staffId: u.staffId }));
                 logs = rawLogs.map((l) => ({
                     id: l._id.toString(),
-                    machineId: l.machineId,
-                    projectId: l.projectId,
-                    productId: l.productId,
+                    machineId: l.machineId ? l.machineId.toString() : null,
+                    projectId: l.projectId ? l.projectId.toString() : null,
+                    productId: l.productId ? l.productId.toString() : null,
                     productName: l.productName,
                     startTime: l.startTime,
                     endTime: l.endTime,
                     estimatedHours: l.estimatedHours,
                     downtime: l.downtime,
                     quantityProduced: l.quantityProduced,
-                    operatorId: l.operatorId,
+                    operatorId: l.operatorId ? l.operatorId.toString() : null,
                     machinePhotoUrl: l.machinePhotoUrl,
                     unitPhotoUrl: l.unitPhotoUrl,
                     softwarePhotoUrl: l.softwarePhotoUrl,
@@ -77,13 +77,15 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     status: l.status,
                     approvalStatus: l.approvalStatus,
                     isCarryForward: l.isCarryForward,
-                    parentLogId: l.parentLogId,
+                    parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
                     remarks: l.remarks,
                     createdAt: l.createdAt,
                     machine: l.machineId ? machineMap.get(l.machineId.toString()) : null,
                     project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
                     operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
                 }));
+                fastCache_1.fastCache.set('all_machine_logs', logs, 15);
+                return res.json(logs);
             }
             catch (err) {
                 console.warn('Mongoose machine log query failed, falling back to Prisma:', err);
