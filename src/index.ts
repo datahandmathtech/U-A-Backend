@@ -279,6 +279,14 @@ app.use((req, res) => {
   }
 });
 
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL CRASH PREVENTED] Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL CRASH PREVENTED] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 import { initCronJobs } from './utils/cronJobs';
 
 // Start Server

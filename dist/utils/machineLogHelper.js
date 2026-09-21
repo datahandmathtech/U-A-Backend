@@ -11,35 +11,37 @@ async function autoSplitActiveMachineLogs() {
         let activeLogs = [];
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
+        let dbSuccess = false;
         if (db && mongoose.connection.readyState === 1) {
             try {
                 const raw = await db.collection('MachineLog').find({ status: 'active' }).toArray();
                 activeLogs = raw.map((l) => ({
                     id: l._id.toString(),
-                    machineId: l.machineId,
-                    projectId: l.projectId,
-                    productId: l.productId,
+                    machineId: l.machineId ? l.machineId.toString() : null,
+                    projectId: l.projectId ? l.projectId.toString() : null,
+                    productId: l.productId ? l.productId.toString() : null,
                     productName: l.productName,
                     startTime: l.startTime,
                     endTime: l.endTime,
                     estimatedHours: l.estimatedHours,
                     quantityProduced: l.quantityProduced,
-                    operatorId: l.operatorId,
+                    operatorId: l.operatorId ? l.operatorId.toString() : null,
                     machinePhotoUrl: l.machinePhotoUrl,
                     unitPhotoUrl: l.unitPhotoUrl,
                     softwarePhotoUrl: l.softwarePhotoUrl,
                     status: l.status,
                     approvalStatus: l.approvalStatus,
                     isCarryForward: l.isCarryForward,
-                    parentLogId: l.parentLogId,
+                    parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
                     remarks: l.remarks
                 }));
+                dbSuccess = true;
             }
             catch (err) {
                 console.warn('Mongoose autoSplit active logs fetch failed:', err);
             }
         }
-        if (activeLogs.length === 0) {
+        if (!dbSuccess) {
             activeLogs = await index_1.prisma.machineLog.findMany({
                 where: { status: 'active' }
             });
