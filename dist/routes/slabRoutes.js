@@ -12,6 +12,125 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const [rawProjects, rawQuotes, rawSlabs, rawPieces, rawOutLogs, rawProdLogs, rawPieceLogs] = await Promise.all([
+                    db.collection('Project').find({}).sort({ createdAt: -1 }).toArray(),
+                    db.collection('Quotation').find({}).sort({ createdAt: -1 }).toArray(),
+                    db.collection('Slab').find({}).toArray(),
+                    db.collection('Piece').find({}).toArray(),
+                    db.collection('InventoryLog').find({ type: 'OUT' }, { projection: { remarks: 1 } }).toArray(),
+                    db.collection('ProductionLog').find({}, { projection: { id: 1, stage: 1, status: 1, approvalStatus: 1, slabId: 1, pieceIds: 1, productName: 1 } }).toArray(),
+                    db.collection('PieceLog').find({}, { projection: { id: 1, pieceId: 1, status: 1, stage: 1 } }).toArray()
+                ]);
+                const quoteMap = new Map();
+                rawQuotes.forEach((q) => {
+                    const pKey = q.projectId?.toString();
+                    if (!quoteMap.has(pKey))
+                        quoteMap.set(pKey, q);
+                });
+                const pieceMap = new Map();
+                rawPieces.forEach((p) => {
+                    const sKey = p.slabId?.toString();
+                    if (!pieceMap.has(sKey))
+                        pieceMap.set(sKey, []);
+                    pieceMap.get(sKey).push({
+                        id: p._id.toString(),
+                        pieceNumber: p.pieceNumber,
+                        productName: p.productName,
+                        size: p.size,
+                        stage: p.stage,
+                        status: p.status,
+                        sourceMaterialId: p.sourceMaterialId,
+                        vendorName: p.vendorName
+                    });
+                });
+                const slabMap = new Map();
+                rawSlabs.forEach((s) => {
+                    const pKey = s.projectId?.toString();
+                    if (!slabMap.has(pKey))
+                        slabMap.set(pKey, []);
+                    slabMap.get(pKey).push({
+                        id: s._id.toString(),
+                        name: s.name,
+                        size: s.size,
+                        pieces: pieceMap.get(s._id.toString()) || []
+                    });
+                });
+                const activePieceRemarks = rawOutLogs.map((l) => l.remarks || '').join(' ');
+                const prodLogSlabIds = new Set();
+                const prodLogPieceIds = new Set();
+                const prodLogProductNames = new Set();
+                for (const pl of rawProdLogs) {
+                    if (pl.slabId)
+                        prodLogSlabIds.add(pl.slabId.toString());
+                    if (Array.isArray(pl.pieceIds)) {
+                        for (const pid of pl.pieceIds)
+                            prodLogPieceIds.add(pid?.toString());
+                    }
+                    if (pl.productName) {
+                        prodLogProductNames.add(pl.productName.trim().toLowerCase());
+                    }
+                }
+                const pieceLogIds = new Set(rawPieceLogs.map((pl) => pl.pieceId?.toString()));
+                const cleanProjects = rawProjects.map((proj) => {
+                    const pId = proj._id.toString();
+                    const firstQuote = quoteMap.get(pId);
+                    const products = Array.isArray(firstQuote?.products) ? firstQuote.products : [];
+                    const projSlabs = slabMap.get(pId) || [];
+                    const slabsWithProduction = projSlabs.map((slab) => {
+                        const matchedProduct = products.find((p) => (p.category && slab.name.startsWith(p.category)) ||
+                            (p.productName && (slab.name === p.productName || slab.name.startsWith(p.productName))));
+                        const rawUnit = (matchedProduct?.unit || (slab.size?.toLowerCase().includes('mm') ? 'mm' : (slab.size?.toLowerCase().includes('ft') ? 'feet' : 'inch'))).toLowerCase();
+                        const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft'))
+                            ? 'feet'
+                            : (rawUnit.includes('mm') ? 'mm' : 'inch');
+                        const piecesWithProduction = slab.pieces.map((piece) => {
+                            const pieceLabel = piece.productName || `Piece ${piece.pieceNumber}`;
+                            const isActuallyLogged = activePieceRemarks.includes(pieceLabel);
+                            const hasPLog = prodLogSlabIds.has(slab.id) ||
+                                prodLogPieceIds.has(piece.id) ||
+                                Boolean(piece.productName && prodLogProductNames.has(piece.productName.trim().toLowerCase()));
+                            const hasPieceLog = pieceLogIds.has(piece.id);
+                            const hasProduction = Boolean(hasPLog || hasPieceLog || piece.status === 'completed' || piece.status === 'active');
+                            return {
+                                ...piece,
+                                unit: slabUnit,
+                                hasProduction,
+                                sourceMaterialId: isActuallyLogged ? piece.sourceMaterialId : null,
+                                vendorName: isActuallyLogged ? piece.vendorName : null
+                            };
+                        });
+                        const slabHasPLog = prodLogSlabIds.has(slab.id) || Array.from(prodLogProductNames).some(pName => pName.startsWith(slab.name.trim().toLowerCase()));
+                        const slabHasPiecesInProduction = piecesWithProduction.some((p) => p.hasProduction);
+                        const hasProduction = Boolean(slabHasPLog || slabHasPiecesInProduction);
+                        const pendingPieces = piecesWithProduction.filter((p) => !p.sourceMaterialId);
+                        return {
+                            ...slab,
+                            unit: slabUnit,
+                            hasProduction,
+                            pendingPiecesCount: pendingPieces.length,
+                            pieces: piecesWithProduction
+                        };
+                    });
+                    return {
+                        id: pId,
+                        name: proj.name,
+                        projectId: proj.projectId,
+                        clientName: proj.clientName,
+                        quotations: firstQuote ? [{ products }] : [],
+                        slabs: slabsWithProduction
+                    };
+                });
+                fastCache_1.fastCache.set(cacheKey, cleanProjects, 30);
+                return res.json(cleanProjects);
+            }
+            catch (mErr) {
+                console.warn('Mongoose project hierarchy query failed:', mErr);
+            }
+        }
         const [projects, outLogs, productionLogs, pieceLogs] = await Promise.all([
             index_1.prisma.project.findMany({
                 select: {
@@ -233,21 +352,21 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         let slabs = [];
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
-        if (!db || mongoose.connection.readyState !== 1) {
-            try {
-                const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
-                const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
-                db = conn.db;
-            }
-            catch (err) {
-                console.warn('Could not establish dedicated Mongoose connection:', err);
-            }
-        }
         if (db) {
             try {
-                const rawSlabs = await db.collection('Slab').find({ projectId: String(projectId) }).sort({ createdAt: 1 }).toArray();
+                const slabProjObjId = mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : null;
+                const slabProjFilter = slabProjObjId
+                    ? { $or: [{ projectId: String(projectId) }, { projectId: slabProjObjId }] }
+                    : { projectId: String(projectId) };
+                const rawSlabs = await db.collection('Slab').find(slabProjFilter).sort({ createdAt: 1 }).toArray();
                 const slabIds = rawSlabs.map((s) => s._id.toString());
-                const rawPieces = await db.collection('Piece').find({ slabId: { $in: slabIds } }).sort({ pieceNumber: 1 }).toArray();
+                const slabObjIds = rawSlabs.map((s) => s._id);
+                const rawPieces = await db.collection('Piece').find({
+                    $or: [
+                        { slabId: { $in: slabIds } },
+                        { slabId: { $in: slabObjIds } }
+                    ]
+                }).sort({ pieceNumber: 1 }).toArray();
                 const pieceMap = new Map();
                 rawPieces.forEach((p) => {
                     const pObj = {
@@ -259,13 +378,14 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         status: p.status,
                         logs: p.logs || []
                     };
-                    if (!pieceMap.has(p.slabId))
-                        pieceMap.set(p.slabId, []);
-                    pieceMap.get(p.slabId).push(pObj);
+                    const sKey = p.slabId?.toString();
+                    if (!pieceMap.has(sKey))
+                        pieceMap.set(sKey, []);
+                    pieceMap.get(sKey).push(pObj);
                 });
                 slabs = rawSlabs.map((s) => ({
                     id: s._id.toString(),
-                    projectId: s.projectId,
+                    projectId: s.projectId?.toString() || s.projectId,
                     name: s.name,
                     size: s.size,
                     cost: s.cost,
