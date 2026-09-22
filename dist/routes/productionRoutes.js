@@ -543,16 +543,6 @@ router.get('/pending-approvals', authMiddleware_1.authenticate, async (req, res)
         let pendingLogs = [];
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
-        if (!db || mongoose.connection.readyState !== 1) {
-            try {
-                const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
-                const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
-                db = conn.db;
-            }
-            catch (err) {
-                console.warn('Could not establish dedicated Mongoose connection:', err);
-            }
-        }
         if (db) {
             try {
                 const rawLogs = await db.collection('ProductionLog').find({ approvalStatus: 'pending' }).sort({ createdAt: -1 }).toArray();

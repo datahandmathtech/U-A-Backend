@@ -130,11 +130,6 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
     try {
       const mongoose = require('mongoose');
       let db = mongoose.connection?.db;
-      if (!db || mongoose.connection.readyState !== 1) {
-        const directUri = process.env.DATABASE_URL || 'mongodb://yatree_admin:Mayank123@ac-n3u3fkt-shard-00-00.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-01.iuq9w0n.mongodb.net:27017,ac-n3u3fkt-shard-00-02.iuq9w0n.mongodb.net:27017/Unnati-arts?ssl=true&replicaSet=atlas-icn4hi-shard-0&authSource=admin&retryWrites=true&w=majority&readPreference=primaryPreferred';
-        const conn = await mongoose.createConnection(directUri, { serverSelectionTimeoutMS: 3000 }).asPromise();
-        db = conn.db;
-      }
       if (db) {
         const rawUser = await db.collection('User').findOne({
           $or: [
