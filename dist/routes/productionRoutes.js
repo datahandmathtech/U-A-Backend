@@ -201,7 +201,8 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         let db = mongoose.connection?.db;
         if (db) {
             try {
-                const rawLogs = await db.collection('ProductionLog').find({ projectId: String(projectId) }).sort({ createdAt: 1 }).toArray();
+                const query = { $or: [{ projectId: String(projectId) }, { projectId: mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : projectId }] };
+                const rawLogs = await db.collection('ProductionLog').find(query).sort({ createdAt: 1 }).toArray();
                 const machineIds = rawLogs.map((l) => l.machineId).filter(Boolean);
                 const workerIds = rawLogs.map((l) => l.workerId).filter(Boolean);
                 const machineObjIds = machineIds.filter((mId) => mongoose.Types.ObjectId.isValid(mId)).map((mId) => new mongoose.Types.ObjectId(mId));
@@ -217,8 +218,8 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                 const enriched = rawLogs.map((l) => ({
                     ...l,
                     id: l._id.toString(),
-                    machine: l.machineId ? machineMap.get(l.machineId) || null : null,
-                    worker: l.workerId ? workerMap.get(l.workerId) || null : null
+                    machine: l.machineId ? machineMap.get(l.machineId.toString()) || null : null,
+                    worker: l.workerId ? workerMap.get(l.workerId.toString()) || null : null
                 }));
                 return res.json(enriched);
             }
@@ -410,29 +411,81 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
         // Handle multiple vendors for OUT/IN transactions
         if (vendors && Array.isArray(vendors) && vendors.length > 0) {
             const newLogs = await Promise.all(vendors.map(async (v) => {
-                return index_1.prisma.productionLog.create({
+                const itemParentLogId = toValidObjectId(v.parentLogId || parentLogId);
+                let itemProjectId = toValidObjectId(v.projectId || projectId);
+                let itemProductName = (v.productName || productName)?.trim() || undefined;
+                let itemProductId = (v.productId || productId)?.trim() || undefined;
+                let itemSlabId = toValidObjectId(v.slabId || slabId);
+                let itemVendorId = toValidObjectId(v.vendorId);
+                let itemVendorName = v.vendorName?.trim() || undefined;
+                let itemStage = v.stage || stage;
+                if (itemParentLogId) {
+                    try {
+                        const pLog = await index_1.prisma.productionLog.findUnique({ where: { id: itemParentLogId } });
+                        if (pLog) {
+                            if (!itemProjectId)
+                                itemProjectId = toValidObjectId(pLog.projectId);
+                            if (!itemProductName)
+                                itemProductName = pLog.productName || undefined;
+                            if (!itemProductId)
+                                itemProductId = pLog.productId || undefined;
+                            if (!itemSlabId)
+                                itemSlabId = toValidObjectId(pLog.slabId);
+                            if (!itemVendorId)
+                                itemVendorId = toValidObjectId(pLog.vendorId);
+                            if (!itemVendorName)
+                                itemVendorName = pLog.vendorName || undefined;
+                            if (!v.stage)
+                                itemStage = pLog.stage || itemStage;
+                        }
+                    }
+                    catch (e) {
+                        console.warn("Parent log lookup error:", e);
+                    }
+                }
+                const created = await index_1.prisma.productionLog.create({
                     data: {
-                        projectId: toValidObjectId(projectId),
-                        stage: v.stage || stage,
+                        projectId: itemProjectId,
+                        stage: itemStage,
                         quantityProduced: v.qty ? parseFloat(v.qty) : 0,
                         transactionType,
                         startPhotos,
                         workerId: toValidObjectId(workerId),
-                        vendorName: v.vendorName?.trim() || undefined,
-                        vendorId: toValidObjectId(v.vendorId),
+                        vendorName: itemVendorName,
+                        vendorId: itemVendorId,
                         vehicleNumber: vehicleNumber?.trim() || undefined,
                         challanNumber: challanNumber?.trim() || undefined,
                         boxCode: req.body.boxCode?.trim() || undefined,
-                        productId: productId?.trim() || undefined,
-                        productName: productName?.trim() || undefined,
-                        slabId: toValidObjectId(slabId),
+                        parentLogId: itemParentLogId,
+                        productId: itemProductId,
+                        productName: itemProductName,
+                        slabId: itemSlabId,
                         pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : []),
-                        approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
+                        approvalStatus: (req.body.source === 'admin_manual' || itemStage === 'Dispatch') ? 'approved' : 'pending',
                         status: 'completed',
                         isReturned: false,
                         returnedQty: 0
                     }
                 });
+                if (transactionType === 'IN' && itemParentLogId) {
+                    try {
+                        const pLog = await index_1.prisma.productionLog.findUnique({ where: { id: itemParentLogId } });
+                        if (pLog) {
+                            const newReturnedQty = (pLog.returnedQty || 0) + (created.quantityProduced || 0);
+                            await index_1.prisma.productionLog.update({
+                                where: { id: itemParentLogId },
+                                data: {
+                                    returnedQty: newReturnedQty,
+                                    isReturned: newReturnedQty >= (pLog.quantityProduced || 0)
+                                }
+                            });
+                        }
+                    }
+                    catch (e) {
+                        console.warn("Failed to update parentLog returnedQty:", e);
+                    }
+                }
+                return created;
             }));
             return res.status(201).json(newLogs);
         }
@@ -527,6 +580,8 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.status(201).json(newLog);
     }
     catch (error) {
@@ -1016,6 +1071,8 @@ router.patch('/:id/approve', authMiddleware_1.authenticate, async (req, res) => 
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         fastCache_1.fastCache.invalidate('all_names_v2');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.json(updatedLog || originalLog);
     }
     catch (error) {
@@ -1132,6 +1189,8 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.json({
             success: true,
             message: `Successfully approved ${approvalList.length} stage item(s) across ${uniquePieceIds.length} piece(s)`,
@@ -1186,6 +1245,8 @@ router.patch('/:id/return', authMiddleware_1.authenticate, async (req, res) => {
             }
         });
         fastCache_1.fastCache.invalidate('prod_');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.json(updated);
     }
     catch (error) {
@@ -1243,6 +1304,8 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.json(updated);
     }
     catch (error) {
@@ -1259,6 +1322,8 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('vendors_stats');
+        fastCache_1.fastCache.invalidate('vendor_ledger_');
         res.json({ message: 'Material log deleted successfully' });
     }
     catch (error) {

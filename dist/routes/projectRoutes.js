@@ -18,31 +18,45 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             try {
                 const rawProjects = await db.collection('Project').find({}).sort({ createdAt: -1 }).toArray();
                 const projectIds = rawProjects.map((p) => p._id.toString());
+                const projectObjIds = projectIds.map((id) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
                 const [rawSlabs, rawQuotes, rawUsers] = await Promise.all([
-                    db.collection('Slab').find({ projectId: { $in: projectIds } }).toArray(),
-                    db.collection('Quotation').find({ projectId: { $in: projectIds } }).sort({ createdAt: -1 }).toArray(),
+                    db.collection('Slab').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).toArray(),
+                    db.collection('Quotation').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).sort({ createdAt: -1 }).toArray(),
                     db.collection('User').find({}, { projection: { name: 1 } }).toArray()
                 ]);
+                const slabIds = rawSlabs.map((s) => s._id.toString());
+                const slabObjIds = slabIds.map((id) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+                const rawPieces = await db.collection('Piece').find({ $or: [{ slabId: { $in: slabIds } }, { slabId: { $in: slabObjIds } }] }).toArray();
                 const userMap = new Map();
                 rawUsers.forEach((u) => userMap.set(u._id.toString(), u.name));
                 const quoteMap = new Map();
                 rawQuotes.forEach((q) => {
-                    if (!quoteMap.has(q.projectId))
-                        quoteMap.set(q.projectId, q);
+                    const pId = q.projectId?.toString();
+                    if (!quoteMap.has(pId))
+                        quoteMap.set(pId, q);
+                });
+                const pieceMap = new Map();
+                rawPieces.forEach((p) => {
+                    const sId = p.slabId?.toString();
+                    if (!pieceMap.has(sId))
+                        pieceMap.set(sId, []);
+                    pieceMap.get(sId).push(p);
                 });
                 const slabMap = new Map();
                 rawSlabs.forEach((s) => {
+                    const sIdStr = s._id.toString();
                     const sObj = {
-                        id: s._id.toString(),
+                        id: sIdStr,
                         name: s.name,
                         size: s.size,
                         status: s.status,
                         requiredStages: s.requiredStages,
-                        pieces: s.pieces || []
+                        pieces: pieceMap.get(sIdStr) || []
                     };
-                    if (!slabMap.has(s.projectId))
-                        slabMap.set(s.projectId, []);
-                    slabMap.get(s.projectId).push(sObj);
+                    const pIdStr = s.projectId?.toString();
+                    if (!slabMap.has(pIdStr))
+                        slabMap.set(pIdStr, []);
+                    slabMap.get(pIdStr).push(sObj);
                 });
                 enrichedProjects = rawProjects.map((p) => {
                     const pId = p._id.toString();
