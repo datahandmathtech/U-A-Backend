@@ -220,7 +220,8 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
 
     if (db) {
       try {
-        const rawLogs = await db.collection('ProductionLog').find({ projectId: String(projectId) }).sort({ createdAt: 1 }).toArray();
+        const query = { $or: [{ projectId: String(projectId) }, { projectId: mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : projectId }] };
+        const rawLogs = await db.collection('ProductionLog').find(query).sort({ createdAt: 1 }).toArray();
         const machineIds = rawLogs.map((l: any) => l.machineId).filter(Boolean);
         const workerIds = rawLogs.map((l: any) => l.workerId).filter(Boolean);
 
@@ -241,8 +242,8 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         const enriched = rawLogs.map((l: any) => ({
           ...l,
           id: l._id.toString(),
-          machine: l.machineId ? machineMap.get(l.machineId) || null : null,
-          worker: l.workerId ? workerMap.get(l.workerId) || null : null
+          machine: l.machineId ? machineMap.get(l.machineId.toString()) || null : null,
+          worker: l.workerId ? workerMap.get(l.workerId.toString()) || null : null
         }));
 
         return res.json(enriched);
