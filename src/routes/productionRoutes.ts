@@ -452,29 +452,76 @@ router.post('/material-log', authenticate, async (req, res) => {
     // Handle multiple vendors for OUT/IN transactions
     if (vendors && Array.isArray(vendors) && vendors.length > 0) {
       const newLogs = await Promise.all(vendors.map(async (v: any) => {
-        return prisma.productionLog.create({
+        const itemParentLogId = toValidObjectId(v.parentLogId || parentLogId);
+        let itemProjectId = toValidObjectId(v.projectId || projectId);
+        let itemProductName = (v.productName || productName)?.trim() || undefined;
+        let itemProductId = (v.productId || productId)?.trim() || undefined;
+        let itemSlabId = toValidObjectId(v.slabId || slabId);
+        let itemVendorId = toValidObjectId(v.vendorId);
+        let itemVendorName = v.vendorName?.trim() || undefined;
+        let itemStage = v.stage || stage;
+
+        if (itemParentLogId) {
+          try {
+            const pLog = await prisma.productionLog.findUnique({ where: { id: itemParentLogId } });
+            if (pLog) {
+              if (!itemProjectId) itemProjectId = toValidObjectId(pLog.projectId);
+              if (!itemProductName) itemProductName = pLog.productName || undefined;
+              if (!itemProductId) itemProductId = pLog.productId || undefined;
+              if (!itemSlabId) itemSlabId = toValidObjectId(pLog.slabId);
+              if (!itemVendorId) itemVendorId = toValidObjectId(pLog.vendorId);
+              if (!itemVendorName) itemVendorName = pLog.vendorName || undefined;
+              if (!v.stage) itemStage = pLog.stage || itemStage;
+            }
+          } catch (e) {
+            console.warn("Parent log lookup error:", e);
+          }
+        }
+
+        const created = await prisma.productionLog.create({
           data: {
-            projectId: toValidObjectId(projectId),
-            stage: v.stage || stage,
+            projectId: itemProjectId,
+            stage: itemStage,
             quantityProduced: v.qty ? parseFloat(v.qty) : 0,
             transactionType,
             startPhotos,
             workerId: toValidObjectId(workerId),
-            vendorName: v.vendorName?.trim() || undefined,
-            vendorId: toValidObjectId(v.vendorId),
+            vendorName: itemVendorName,
+            vendorId: itemVendorId,
             vehicleNumber: vehicleNumber?.trim() || undefined,
             challanNumber: challanNumber?.trim() || undefined,
             boxCode: req.body.boxCode?.trim() || undefined,
-            productId: productId?.trim() || undefined,
-            productName: productName?.trim() || undefined,
-            slabId: toValidObjectId(slabId),
+            parentLogId: itemParentLogId,
+            productId: itemProductId,
+            productName: itemProductName,
+            slabId: itemSlabId,
             pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : []),
-            approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
+            approvalStatus: (req.body.source === 'admin_manual' || itemStage === 'Dispatch') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
             returnedQty: 0
           }
         });
+
+        if (transactionType === 'IN' && itemParentLogId) {
+          try {
+            const pLog = await prisma.productionLog.findUnique({ where: { id: itemParentLogId } });
+            if (pLog) {
+              const newReturnedQty = (pLog.returnedQty || 0) + (created.quantityProduced || 0);
+              await prisma.productionLog.update({
+                where: { id: itemParentLogId },
+                data: {
+                  returnedQty: newReturnedQty,
+                  isReturned: newReturnedQty >= (pLog.quantityProduced || 0)
+                }
+              });
+            }
+          } catch (e) {
+            console.warn("Failed to update parentLog returnedQty:", e);
+          }
+        }
+
+        return created;
       }));
       return res.status(201).json(newLogs);
     }
@@ -573,6 +620,8 @@ router.post('/material-log', authenticate, async (req, res) => {
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
 
     res.status(201).json(newLog);
   } catch (error: any) {
@@ -1083,6 +1132,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('project_hierarchy_v2');
     fastCache.invalidate('all_names_v2');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
 
     res.json(updatedLog || originalLog);
   } catch (error: any) {
@@ -1209,6 +1260,8 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
 
     res.json({
       success: true,
@@ -1268,6 +1321,8 @@ router.patch('/:id/return', authenticate, async (req: any, res: any) => {
     });
 
     fastCache.invalidate('prod_');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
     res.json(updated);
   } catch (error) {
     console.error(error);
@@ -1331,6 +1386,8 @@ router.put('/:id', authenticate, async (req, res) => {
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
 
     res.json(updated);
   } catch (error) {
@@ -1348,6 +1405,8 @@ router.delete('/:id', authenticate, async (req, res) => {
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('project_hierarchy_v2');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
     res.json({ message: 'Material log deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error deleting material log' });

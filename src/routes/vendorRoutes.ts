@@ -38,14 +38,26 @@ router.get('/', async (req, res) => {
     if (db) {
       try {
         const rawVendors = await db.collection('Vendor').find({ status: 'active' }).sort({ createdAt: -1 }).toArray();
-        const vendorIds = rawVendors.map((v: any) => v._id.toString());
+        const { ObjectId } = mongoose.Types;
+        const vendorObjIds = rawVendors.map((v: any) => v._id);
+        const vendorStringIds = rawVendors.map((v: any) => v._id.toString());
+        const vendorNames = rawVendors.map((v: any) => v.name).filter(Boolean);
+
         const rawLogs = await db.collection('ProductionLog').find({
-          vendorId: { $in: vendorIds },
+          $or: [
+            { vendorId: { $in: [...vendorObjIds, ...vendorStringIds] } },
+            { vendorName: { $in: vendorNames } }
+          ],
           createdAt: { $gte: startOfFY, $lte: endOfFY }
         }).toArray();
 
         vendors = rawVendors.map((v: any) => ({ ...v, id: v._id.toString() }));
-        allLogs = rawLogs.map((l: any) => ({ ...l, id: l._id.toString(), createdAt: new Date(l.createdAt) }));
+        allLogs = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          vendorIdStr: l.vendorId ? l.vendorId.toString() : '',
+          createdAt: new Date(l.createdAt)
+        }));
         dbSuccess = true;
       } catch (mErr) {
         console.warn('Mongoose vendors fetch failed:', mErr);
@@ -58,28 +70,36 @@ router.get('/', async (req, res) => {
         orderBy: { createdAt: 'desc' }
       });
 
+      const vendorNames = vendors.map(v => v.name).filter(Boolean);
       allLogs = await prisma.productionLog.findMany({
         where: {
-          vendorId: { in: vendors.map(v => v.id) },
+          OR: [
+            { vendorId: { in: vendors.map(v => v.id) } },
+            { vendorName: { in: vendorNames } }
+          ],
           createdAt: { gte: startOfFY, lte: endOfFY }
         }
       });
+      allLogs = allLogs.map((l: any) => ({
+        ...l,
+        vendorIdStr: l.vendorId ? l.vendorId.toString() : '',
+        createdAt: new Date(l.createdAt)
+      }));
     }
 
     const vendorStats = vendors.map((vendor) => {
-      const logs = allLogs.filter(log => log.vendorId === vendor.id);
+      const logs = allLogs.filter(log => {
+        const vIdStr = log.vendorIdStr || (log.vendorId ? log.vendorId.toString() : '');
+        const vNameStr = log.vendorName ? log.vendorName.trim().toLowerCase() : '';
+        const curNameStr = vendor.name ? vendor.name.trim().toLowerCase() : '';
+        return (vIdStr && vIdStr === vendor.id) || (vNameStr && curNameStr && vNameStr === curNameStr);
+      });
 
       let filteredLogs = logs;
       let pastLogs: any[] = [];
       let openingBalance = 0;
 
       if (month && month !== 'All' && month !== 'undefined') {
-        const monthFilterIndex = logs.findIndex(l => {
-           const d = new Date(l.createdAt);
-           const monthStr = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
-           return monthStr === month;
-        });
-        
         filteredLogs = logs.filter((log) => {
           const d = new Date(log.createdAt);
           const monthStr = `${d.toLocaleString('default', { month: 'long' })} ${d.getFullYear()}`;
@@ -135,16 +155,68 @@ router.get('/:id/ledger', async (req, res) => {
     const startOfFY = new Date(`${currentYear}-04-01T00:00:00.000Z`);
     const endOfFY = new Date(`${currentYear + 1}-03-31T23:59:59.999Z`);
 
-    const logs = await prisma.productionLog.findMany({
-      where: {
-        vendorId: id,
-        createdAt: { gte: startOfFY, lte: endOfFY }
-      },
-      orderBy: { createdAt: 'asc' }, // Ascending for running balance
-      include: {
-        project: { select: { name: true } }
+    const mongoose = require('mongoose');
+    const db = mongoose.connection?.db;
+    let logs: any[] = [];
+    let dbSuccess = false;
+
+    if (db) {
+      try {
+        const { ObjectId } = mongoose.Types;
+        const objId = ObjectId.isValid(id) ? new ObjectId(id) : null;
+        const vendor = await db.collection('Vendor').findOne({
+          $or: [
+            ...(objId ? [{ _id: objId }] : []),
+            { _id: id }
+          ]
+        });
+
+        const queryOr: any[] = [
+          ...(objId ? [{ vendorId: objId }] : []),
+          { vendorId: id }
+        ];
+        if (vendor?.name) {
+          queryOr.push({ vendorName: vendor.name });
+        }
+
+        const rawLogs = await db.collection('ProductionLog').find({
+          $or: queryOr,
+          createdAt: { $gte: startOfFY, $lte: endOfFY }
+        }).sort({ createdAt: 1 }).toArray();
+
+        const projectIds = rawLogs.map((l: any) => l.projectId).filter(Boolean);
+        const projects = await db.collection('Project').find({
+          _id: { $in: projectIds.map((pid: any) => ObjectId.isValid(pid) ? new ObjectId(pid) : pid) }
+        }).toArray();
+        const projectMap = new Map();
+        projects.forEach((p: any) => {
+          projectMap.set(p._id.toString(), p.name);
+        });
+
+        logs = rawLogs.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          project: l.projectId ? { name: projectMap.get(l.projectId.toString()) || '' } : undefined,
+          createdAt: new Date(l.createdAt)
+        }));
+        dbSuccess = true;
+      } catch (mErr) {
+        console.warn('Mongoose vendor ledger fetch failed:', mErr);
       }
-    });
+    }
+
+    if (!dbSuccess) {
+      logs = await prisma.productionLog.findMany({
+        where: {
+          vendorId: id,
+          createdAt: { gte: startOfFY, lte: endOfFY }
+        },
+        orderBy: { createdAt: 'asc' }, // Ascending for running balance
+        include: {
+          project: { select: { name: true } }
+        }
+      });
+    }
 
     let runningBalance = 0;
     const ledgerEntries = logs.map(log => {
@@ -155,9 +227,10 @@ router.get('/:id/ledger', async (req, res) => {
       runningBalance = runningBalance + piecesOut - piecesIn; // +Out -In
 
       return {
+        ...log,
         id: log.id,
         date: log.createdAt,
-        narration: `${isOut ? 'OUT' : 'IN'} - ${log.stage} - ${log.productName || 'Product'}`,
+        narration: `${isOut ? 'OUT' : 'IN'} - ${log.stage || 'General'} - ${log.productName || 'Product'}`,
         stage: log.stage,
         vehicleNumber: log.vehicleNumber || '-',
         piecesOut,
