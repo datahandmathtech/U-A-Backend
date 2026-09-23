@@ -334,6 +334,58 @@ router.patch('/:id/complete', authenticate, async (req, res) => {
 
 // --- MATERIAL TRACKING ENDPOINTS ---
 
+// Helper to keep parent OUT log returnedQty and isReturned synchronized with approved child IN logs
+export async function syncParentOutLog(parentLogId: string) {
+  if (!parentLogId) return;
+  try {
+    const parentLog = await prisma.productionLog.findUnique({ where: { id: String(parentLogId) } });
+    if (!parentLog) return;
+
+    const mongoose = require('mongoose');
+    const db = mongoose.connection?.db;
+    let approvedInSum = 0;
+
+    if (db) {
+      const { ObjectId } = mongoose.Types;
+      const objId = ObjectId.isValid(parentLogId) ? new ObjectId(parentLogId) : null;
+      const childInLogs = await db.collection('ProductionLog').find({
+        parentLogId: { $in: [objId, String(parentLogId)].filter(Boolean) },
+        transactionType: 'IN',
+        approvalStatus: 'approved'
+      }).toArray();
+      approvedInSum = childInLogs.reduce((sum: number, l: any) => sum + (Number(l.quantityProduced) || 0), 0);
+    } else {
+      const childInLogs = await prisma.productionLog.findMany({
+        where: {
+          parentLogId: String(parentLogId),
+          transactionType: 'IN',
+          approvalStatus: 'approved'
+        }
+      });
+      approvedInSum = childInLogs.reduce((sum: number, l: any) => sum + (Number(l.quantityProduced) || 0), 0);
+    }
+
+    const outQty = Number(parentLog.quantityProduced) || 0;
+    const isReturned = approvedInSum >= outQty && outQty > 0;
+
+    await prisma.productionLog.update({
+      where: { id: String(parentLogId) },
+      data: {
+        returnedQty: approvedInSum,
+        isReturned: isReturned
+      }
+    });
+
+    fastCache.invalidate('prod_active_out_logs');
+    fastCache.invalidate('prod_pending_approvals');
+    fastCache.invalidate('prod_approved_logs');
+    fastCache.invalidate('vendors_stats');
+    fastCache.invalidate('vendor_ledger_');
+  } catch (err) {
+    console.warn(`syncParentOutLog error for ${parentLogId}:`, err);
+  }
+}
+
 // Fetch all active/unreturned OUT logs (transactionType: 'OUT', approvalStatus: 'approved', isReturned: false/null)
 router.get('/active-out-logs', authenticate, async (req, res) => {
   try {
@@ -372,13 +424,13 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
     // Subtract pending quantities
     const activeOutLogs = allApprovedOutLogs.filter(log => {
       const pendingReturns = pendingInLogs
-        .filter(inLog => inLog.parentLogId === log.id)
+        .filter(inLog => String(inLog.parentLogId) === String(log.id))
         .reduce((sum, inLog) => sum + (inLog.quantityProduced || 0), 0);
         
       const availableQty = (log.quantityProduced || 0) - (log.returnedQty || 0) - pendingReturns;
       
-      // Mutate log.returnedQty temporarily so frontend calculates remaining correctly
-      (log as any).returnedQty = (log.returnedQty || 0) + pendingReturns;
+      // Attach remaining available quantity so frontend displays it directly
+      (log as any).pendingQty = Math.max(0, availableQty);
       
       return availableQty > 0;
     });
@@ -504,20 +556,8 @@ router.post('/material-log', authenticate, async (req, res) => {
         });
 
         if (transactionType === 'IN' && itemParentLogId) {
-          try {
-            const pLog = await prisma.productionLog.findUnique({ where: { id: itemParentLogId } });
-            if (pLog) {
-              const newReturnedQty = (pLog.returnedQty || 0) + (created.quantityProduced || 0);
-              await prisma.productionLog.update({
-                where: { id: itemParentLogId },
-                data: {
-                  returnedQty: newReturnedQty,
-                  isReturned: newReturnedQty >= (pLog.quantityProduced || 0)
-                }
-              });
-            }
-          } catch (e) {
-            console.warn("Failed to update parentLog returnedQty:", e);
+          if (created.approvalStatus === 'approved') {
+            await syncParentOutLog(itemParentLogId);
           }
         }
 
@@ -596,22 +636,8 @@ router.post('/material-log', authenticate, async (req, res) => {
 
     // Update parent log for IN transactions (Partial returns support)
     if (newLog.transactionType === 'IN' && newLog.parentLogId) {
-      try {
-        const parentLog = await prisma.productionLog.findUnique({ where: { id: newLog.parentLogId } });
-        if (parentLog) {
-          const newReturnedQty = (parentLog.returnedQty || 0) + (newLog.quantityProduced || 0);
-          const isFullyReturned = newReturnedQty >= (parentLog.quantityProduced || 0);
-          
-          await prisma.productionLog.update({
-            where: { id: newLog.parentLogId },
-            data: { 
-              returnedQty: newReturnedQty,
-              isReturned: isFullyReturned 
-            }
-          });
-        }
-      } catch (err) {
-        console.warn(`Failed to update parentLog returnedQty for ${newLog.parentLogId}:`, err);
+      if (newLog.approvalStatus === 'approved') {
+        await syncParentOutLog(String(newLog.parentLogId));
       }
     }
 
@@ -944,55 +970,47 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
         }
       }
 
-      // If this is an IN log, apply the returns to pending OUT logs (FIFO)
+      // If this is an IN log, apply the returns to pending OUT logs
       if (originalLog.transactionType === 'IN') {
-        for (const split of splits) {
-          try {
-            let remainingToReturn = Number(split.qty);
-            
-            const whereClause: any = {
-              transactionType: 'OUT',
-              approvalStatus: 'approved',
-              stage: originalLog.stage,
-            };
-            if (originalLog.workerId) {
-              whereClause.workerId = originalLog.workerId;
-            } else if (originalLog.vendorName) {
-              whereClause.vendorName = originalLog.vendorName;
-            }
+        const pId = originalLog.parentLogId || (splits && splits[0]?.parentLogId);
+        if (pId) {
+          await syncParentOutLog(String(pId));
+        } else {
+          for (const split of splits) {
+            try {
+              let remainingToReturn = Number(split.qty);
+              const whereClause: any = {
+                transactionType: 'OUT',
+                approvalStatus: 'approved',
+                stage: originalLog.stage,
+                isReturned: { not: true }
+              };
+              if (originalLog.workerId) whereClause.workerId = originalLog.workerId;
+              else if (originalLog.vendorName) whereClause.vendorName = originalLog.vendorName;
 
-            const pendingOutLogs = await prisma.productionLog.findMany({
-              where: whereClause,
-              orderBy: { createdAt: 'asc' }
-            });
-            
-            for (const outLog of pendingOutLogs) {
-              if (remainingToReturn <= 0) break;
+              const pendingOutLogs = await prisma.productionLog.findMany({
+                where: whereClause,
+                orderBy: { createdAt: 'asc' }
+              });
               
-              const qtyProduced = Number(outLog.quantityProduced) || 0;
-              const returnedQty = Number(outLog.returnedQty) || 0;
-              const pendingQty = qtyProduced - returnedQty;
-              
-              if (pendingQty > 0) {
-                const returnAmount = Math.min(pendingQty, remainingToReturn);
-                const updatedPieceIds = Array.from(new Set([...(outLog.pieceIds || []), ...(split.pieceIds || [])]));
-                await prisma.productionLog.update({
-                  where: { id: outLog.id },
-                  data: {
-                    returnedQty: returnedQty + returnAmount,
-                    isReturned: (returnedQty + returnAmount) >= qtyProduced,
-                    projectId: split.projectId ? String(split.projectId) : undefined,
-                    productId: split.productId ? String(split.productId) : undefined,
-                    productName: split.productName ? String(split.productName) : undefined,
-                    slabId: split.slabId ? String(split.slabId) : undefined,
-                    pieceIds: updatedPieceIds
-                  }
-                });
-                remainingToReturn -= returnAmount;
+              for (const outLog of pendingOutLogs) {
+                if (remainingToReturn <= 0) break;
+                const qtyProduced = Number(outLog.quantityProduced) || 0;
+                const returnedQty = Number(outLog.returnedQty) || 0;
+                const pendingQty = qtyProduced - returnedQty;
+                if (pendingQty > 0) {
+                  const returnAmount = Math.min(pendingQty, remainingToReturn);
+                  remainingToReturn -= returnAmount;
+                  await prisma.productionLog.update({
+                    where: { id: String(id) },
+                    data: { parentLogId: outLog.id }
+                  });
+                  await syncParentOutLog(outLog.id);
+                }
               }
+            } catch (fifoErr) {
+              console.warn('FIFO return tracking warning:', fifoErr);
             }
-          } catch (fifoErr) {
-            console.warn('FIFO return tracking warning:', fifoErr);
           }
         }
       }
@@ -1113,12 +1131,8 @@ router.patch('/:id/approve', authenticate, async (req, res) => {
             }
           });
         } else {
-          const parentLogExists = await prisma.productionLog.findUnique({ where: { id: updatedLog.parentLogId } });
-          if (parentLogExists) {
-            await prisma.productionLog.update({
-              where: { id: updatedLog.parentLogId },
-              data: { isReturned: true }
-            });
+          if (updatedLog.approvalStatus === 'approved') {
+            await syncParentOutLog(String(updatedLog.parentLogId));
           }
         }
       } catch (err) {
@@ -1382,6 +1396,10 @@ router.put('/:id', authenticate, async (req, res) => {
         }
     }
     
+    if (log.transactionType === 'IN' && log.parentLogId) {
+      await syncParentOutLog(String(log.parentLogId));
+    }
+
     fastCache.invalidate('prod_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
@@ -1398,9 +1416,13 @@ router.put('/:id', authenticate, async (req, res) => {
 // Delete material log
 router.delete('/:id', authenticate, async (req, res) => {
   try {
+    const logToDelete = await prisma.productionLog.findUnique({ where: { id: req.params.id as string } });
     await prisma.productionLog.delete({
       where: { id: req.params.id as string }
     });
+    if (logToDelete?.transactionType === 'IN' && logToDelete.parentLogId) {
+      await syncParentOutLog(String(logToDelete.parentLogId));
+    }
     fastCache.invalidate('prod_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
