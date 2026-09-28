@@ -30,36 +30,54 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     db.collection('Inventory').find({}).sort({ createdAt: -1 }).toArray(),
                     db.collection('InventoryLog').find({ createdAt: { $gte: startOfFy } }, { projection: { inventoryId: true, type: true, quantity: true, createdAt: true } }).toArray()
                 ]);
-                const invIds = rawInvs.map((i) => i._id.toString());
+                const invObjIds = rawInvs.map((i) => i._id);
+                const invStrIds = rawInvs.map((i) => i._id.toString());
+                const allInvLookup = Array.from(new Set([...invObjIds, ...invStrIds]));
                 const [rawMats, rawSlabs] = await Promise.all([
-                    db.collection('ProjectMaterial').find({ inventoryId: { $in: invIds } }).toArray(),
-                    db.collection('Slab').find({ inventoryId: { $in: invIds } }).toArray()
+                    db.collection('ProjectMaterial').find({ inventoryId: { $in: allInvLookup } }).toArray(),
+                    db.collection('Slab').find({ inventoryId: { $in: allInvLookup } }).toArray()
                 ]);
-                const allProjIds = Array.from(new Set([...rawMats.map((m) => m.projectId), ...rawSlabs.map((s) => s.projectId)].filter(Boolean)));
-                const projObjIds = allProjIds.filter((pId) => mongoose.Types.ObjectId.isValid(pId)).map((pId) => new mongoose.Types.ObjectId(pId));
+                const allProjIds = Array.from(new Set([
+                    ...rawMats.map((m) => m.projectId?.toString()),
+                    ...rawSlabs.map((s) => s.projectId?.toString())
+                ].filter(Boolean)));
+                const projObjIds = allProjIds
+                    .filter((pId) => mongoose.Types.ObjectId.isValid(pId))
+                    .map((pId) => new mongoose.Types.ObjectId(pId));
                 const rawProjects = await db.collection('Project').find({ $or: [{ _id: { $in: projObjIds } }, { id: { $in: allProjIds } }] }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray();
                 const projMap = new Map();
-                rawProjects.forEach((p) => projMap.set(p._id.toString(), { id: p._id.toString(), name: p.name, projectId: p.projectId, clientName: p.clientName }));
+                rawProjects.forEach((p) => {
+                    projMap.set(p._id.toString(), {
+                        id: p._id.toString(),
+                        name: p.name,
+                        projectId: p.projectId,
+                        clientName: p.clientName
+                    });
+                });
                 const matMap = new Map();
                 rawMats.forEach((m) => {
-                    if (!matMap.has(m.inventoryId))
-                        matMap.set(m.inventoryId, []);
-                    matMap.get(m.inventoryId).push({
+                    const invKey = m.inventoryId?.toString();
+                    const pKey = m.projectId?.toString();
+                    if (!matMap.has(invKey))
+                        matMap.set(invKey, []);
+                    matMap.get(invKey).push({
                         id: m._id.toString(),
-                        projectId: m.projectId,
+                        projectId: pKey,
                         quantity: m.quantity,
-                        project: projMap.get(m.projectId) || null
+                        project: projMap.get(pKey) || null
                     });
                 });
                 const slabMap = new Map();
                 rawSlabs.forEach((s) => {
-                    if (!slabMap.has(s.inventoryId))
-                        slabMap.set(s.inventoryId, []);
-                    slabMap.get(s.inventoryId).push({
+                    const invKey = s.inventoryId?.toString();
+                    const pKey = s.projectId?.toString();
+                    if (!slabMap.has(invKey))
+                        slabMap.set(invKey, []);
+                    slabMap.get(invKey).push({
                         id: s._id.toString(),
                         name: s.name,
-                        projectId: s.projectId,
-                        project: projMap.get(s.projectId) || null
+                        projectId: pKey,
+                        project: projMap.get(pKey) || null
                     });
                 });
                 inventory = rawInvs.map((inv) => ({
@@ -256,15 +274,16 @@ router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) =>
         const inventoryItems = await index_1.prisma.inventory.findMany({
             where: {
                 OR: [
-                    { supplier: String(supplier) },
+                    { supplier: { equals: String(supplier), mode: 'insensitive' } },
+                    ...(String(supplier).toLowerCase().includes('unnati') ? [{ supplier: { equals: 'Unnati Arts', mode: 'insensitive' } }] : []),
                     {
                         projectMaterials: {
                             some: {
                                 project: {
                                     OR: [
-                                        { name: String(supplier) },
-                                        { projectId: String(supplier) },
-                                        { clientName: String(supplier) }
+                                        { name: { equals: String(supplier), mode: 'insensitive' } },
+                                        { projectId: { equals: String(supplier), mode: 'insensitive' } },
+                                        { clientName: { equals: String(supplier), mode: 'insensitive' } }
                                     ]
                                 }
                             }
@@ -275,9 +294,9 @@ router.get('/logs/:supplier', authMiddleware_1.authenticate, async (req, res) =>
                             some: {
                                 project: {
                                     OR: [
-                                        { name: String(supplier) },
-                                        { projectId: String(supplier) },
-                                        { clientName: String(supplier) }
+                                        { name: { equals: String(supplier), mode: 'insensitive' } },
+                                        { projectId: { equals: String(supplier), mode: 'insensitive' } },
+                                        { clientName: { equals: String(supplier), mode: 'insensitive' } }
                                     ]
                                 }
                             }
@@ -370,14 +389,15 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
                         const l = Number(length) || 0;
                         const w = Number(width) || 0;
                         const t = thickness ? ` | ${thickness}MM` : '';
+                        const sqFtStr = used > 0 ? ` | ${used.toFixed(2)} Sq.Ft` : '';
                         if (unit === 'feet') {
-                            usedSizeStr = `${l}ft x ${w}ft${t}`;
+                            usedSizeStr = `${l}ft x ${w}ft${t}${sqFtStr}`;
                         }
                         else if (unit === 'mm') {
-                            usedSizeStr = `${l}mm x ${w}mm${t}`;
+                            usedSizeStr = `${l}mm x ${w}mm${t}${sqFtStr}`;
                         }
                         else {
-                            usedSizeStr = `${l}" x ${w}"${t}`;
+                            usedSizeStr = `${l}" x ${w}"${t}${sqFtStr}`;
                         }
                     }
                     await index_1.prisma.piece.update({
@@ -397,9 +417,12 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
             }).catch(() => { });
         }
         const createdAt = date ? new Date(date) : new Date();
-        // Clean project and piece name remarks only without duplicating brackets
         let cleanProjName = (projectName || '').replace(/\s*\(\d+(?:\.\d+)?\s*L?\s*[xX]\s*\d+(?:\.\d+)?\s*W?[^)]*\)/gi, '').trim();
-        let outRemarks = cleanProjName ? `${cleanProjName}${pieceName ? ` (${pieceName})` : ''}` : 'Manual Deduction';
+        let cleanPieceName = (pieceName || '')
+            .replace(/\s*\(\d+(?:\.\d+)?\s*(?:mm|ft|in|L)?[xX×]\s*\d+(?:\.\d+)?\s*(?:mm|ft|in|W)?[^)]*\)/gi, '')
+            .replace(/\s*\([^)]*Sq\.?Ft[^)]*\)/gi, '')
+            .trim();
+        let outRemarks = cleanProjName ? `${cleanProjName}${cleanPieceName ? ` (${cleanPieceName})` : ''}` : 'Manual Deduction';
         if (pieceId) {
             outRemarks = `[Piece:${pieceId}] ${outRemarks}`;
         }
@@ -520,54 +543,86 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                 if (log.remarks) {
                     const idMatch = log.remarks.match(/\[Piece:([a-f\d]{24})\]/i);
                     const taggedPieceId = (idMatch && idMatch[1]) ? idMatch[1].trim() : '';
+                    let targetProjectId = null;
                     if (taggedPieceId) {
-                        await index_1.prisma.piece.update({
-                            where: { id: taggedPieceId },
-                            data: { sourceMaterialId: null, vendorName: null }
-                        }).catch(() => { });
-                    }
-                    // Also check for piece name in brackets, e.g. "Hayden Testing (HIPL 4.1)"
-                    const bracketMatches = Array.from(log.remarks.matchAll(/\(([^)]+)\)/g));
-                    for (const m of bracketMatches) {
-                        const inside = (m && m[1]) ? m[1].trim() : '';
-                        if (inside && !inside.includes('Sq.Ft') && !inside.includes('ft') && !inside.includes('mm') && !inside.includes('"')) {
-                            const p = await index_1.prisma.piece.findFirst({
-                                where: {
-                                    OR: [
-                                        { productName: inside },
-                                        { productName: { contains: inside } }
-                                    ]
-                                }
+                        try {
+                            const p = await index_1.prisma.piece.findUnique({
+                                where: { id: taggedPieceId },
+                                include: { slab: true }
                             });
                             if (p) {
+                                targetProjectId = p.slab?.projectId || null;
                                 await index_1.prisma.piece.update({
-                                    where: { id: p.id },
+                                    where: { id: taggedPieceId },
                                     data: { sourceMaterialId: null, vendorName: null }
-                                }).catch(() => { });
+                                });
+                            }
+                        }
+                        catch (e) {
+                            console.error('Error unlinking tagged piece:', e);
+                        }
+                    }
+                    else {
+                        // Only check brackets if no taggedPieceId
+                        const bracketMatches = Array.from(log.remarks.matchAll(/\(([^)]+)\)/g));
+                        for (const m of bracketMatches) {
+                            const inside = (m && m[1]) ? m[1].trim() : '';
+                            if (inside && !inside.includes('Sq.Ft') && !inside.includes('ft') && !inside.includes('mm') && !inside.includes('"')) {
+                                try {
+                                    const p = await index_1.prisma.piece.findFirst({
+                                        where: { productName: inside },
+                                        include: { slab: true }
+                                    });
+                                    if (p) {
+                                        targetProjectId = p.slab?.projectId || null;
+                                        await index_1.prisma.piece.update({
+                                            where: { id: p.id },
+                                            data: { sourceMaterialId: null, vendorName: null }
+                                        });
+                                        break;
+                                    }
+                                }
+                                catch (e) {
+                                    console.error('Error finding piece by name:', e);
+                                }
                             }
                         }
                     }
-                }
-                // 2. Decrement ProjectMaterial quantity and usedQuantity for this inventory item
-                const projMats = await index_1.prisma.projectMaterial.findMany({
-                    where: { inventoryId: log.inventoryId }
-                });
-                for (const pm of projMats) {
-                    const newUsed = Math.max(0, (pm.usedQuantity || 0) - log.quantity);
-                    const newQty = Math.max(0, (pm.quantity || 0) - log.quantity);
-                    if (newQty <= 0) {
-                        // Unlink all pieces pointing to this exhausted projectMaterial
-                        await index_1.prisma.piece.updateMany({
-                            where: { sourceMaterialId: pm.id },
-                            data: { sourceMaterialId: null, vendorName: null }
-                        });
-                        await index_1.prisma.projectMaterial.delete({ where: { id: pm.id } }).catch(() => { });
+                    // 2. Decrement ProjectMaterial quantity and usedQuantity for this inventory item
+                    try {
+                        const pmWhere = { inventoryId: log.inventoryId };
+                        if (targetProjectId) {
+                            pmWhere.projectId = targetProjectId;
+                        }
+                        const projMats = await index_1.prisma.projectMaterial.findMany({ where: pmWhere });
+                        for (const pm of projMats) {
+                            const newUsed = Math.max(0, (pm.usedQuantity || 0) - log.quantity);
+                            const newQty = Math.max(0, (pm.quantity || 0) - log.quantity);
+                            if (newQty <= 0) {
+                                // Only unlink pieces if this PM is truly deleted
+                                const remainingPieces = await index_1.prisma.piece.count({
+                                    where: { sourceMaterialId: pm.id }
+                                });
+                                if (remainingPieces === 0) {
+                                    await index_1.prisma.projectMaterial.delete({ where: { id: pm.id } }).catch(() => { });
+                                }
+                                else {
+                                    await index_1.prisma.projectMaterial.update({
+                                        where: { id: pm.id },
+                                        data: { usedQuantity: 0, quantity: 0 }
+                                    });
+                                }
+                            }
+                            else {
+                                await index_1.prisma.projectMaterial.update({
+                                    where: { id: pm.id },
+                                    data: { usedQuantity: newUsed, quantity: newQty }
+                                });
+                            }
+                        }
                     }
-                    else {
-                        await index_1.prisma.projectMaterial.update({
-                            where: { id: pm.id },
-                            data: { usedQuantity: newUsed, quantity: newQty }
-                        });
+                    catch (pmErr) {
+                        console.error('Error updating projectMaterial on log delete:', pmErr);
                     }
                 }
             }

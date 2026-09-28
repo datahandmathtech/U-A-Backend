@@ -3,15 +3,8 @@ import { prisma } from '../index';
 import { autoSplitActiveMachineLogs } from './machineLogHelper';
 
 export const initCronJobs = () => {
-  // 1. Midnight auto-split for running machines (Carry Forward across 12:00 AM)
-  // Runs every 5 minutes and explicitly at midnight 00:00
-  cron.schedule('*/5 * * * *', async () => {
-    try {
-      await autoSplitActiveMachineLogs();
-    } catch (err) {
-      console.error('[CRON] Error in autoSplitActiveMachineLogs:', err);
-    }
-  });
+  // Manual Carry Forward: Machines run continuously until manually stopped by operators.
+  // Auto-splitting cron removed to prevent unexpected duplicate machine log creations.
 
   // 2. Run on the 1st of every month at 00:01
   // This will calculate the closing stock of the previous month and save it as the opening stock of the current month

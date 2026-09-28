@@ -8,7 +8,7 @@ const router = (0, express_1.Router)();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const cacheKey = 'project_hierarchy_v2';
+        const cacheKey = 'project_hierarchy_v3';
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
@@ -83,7 +83,24 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                     const slabsWithProduction = projSlabs.map((slab) => {
                         const matchedProduct = products.find((p) => (p.category && slab.name.startsWith(p.category)) ||
                             (p.productName && (slab.name === p.productName || slab.name.startsWith(p.productName))));
-                        const rawUnit = (matchedProduct?.unit || (slab.size?.toLowerCase().includes('mm') ? 'mm' : (slab.size?.toLowerCase().includes('ft') ? 'feet' : 'inch'))).toLowerCase();
+                        const pUnit = (matchedProduct?.unit || '').toLowerCase();
+                        const pDimUnit = (matchedProduct?.dimensionUnit || '').toLowerCase();
+                        let rawUnit = '';
+                        if (pUnit.startsWith('piece') || pUnit === 'pcs') {
+                            rawUnit = pDimUnit || '';
+                        }
+                        else if (pUnit) {
+                            rawUnit = pUnit;
+                        }
+                        const sizeLower = `${slab.size || ''} ${slab.pieces?.[0]?.size || ''}`.toLowerCase();
+                        if (!rawUnit || rawUnit === 'inch') {
+                            if (sizeLower.includes('(mm)') || sizeLower.includes('mm')) {
+                                rawUnit = 'mm';
+                            }
+                            else if (sizeLower.includes('(ft)') || sizeLower.includes('ft') || sizeLower.includes('feet')) {
+                                rawUnit = 'feet';
+                            }
+                        }
                         const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft'))
                             ? 'feet'
                             : (rawUnit.includes('mm') ? 'mm' : 'inch');
@@ -212,7 +229,24 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
             const slabsWithProduction = proj.slabs.map(slab => {
                 const matchedProduct = products.find((p) => (p.category && slab.name.startsWith(p.category)) ||
                     (p.productName && (slab.name === p.productName || slab.name.startsWith(p.productName))));
-                const rawUnit = (matchedProduct?.unit || (slab.size?.toLowerCase().includes('mm') ? 'mm' : (slab.size?.toLowerCase().includes('ft') ? 'feet' : 'inch'))).toLowerCase();
+                const pUnit = (matchedProduct?.unit || '').toLowerCase();
+                const pDimUnit = (matchedProduct?.dimensionUnit || '').toLowerCase();
+                let rawUnit = '';
+                if (pUnit.startsWith('piece') || pUnit === 'pcs') {
+                    rawUnit = pDimUnit || '';
+                }
+                else if (pUnit) {
+                    rawUnit = pUnit;
+                }
+                const sizeLower = `${slab.size || ''} ${slab.pieces?.[0]?.size || ''}`.toLowerCase();
+                if (!rawUnit || rawUnit === 'inch') {
+                    if (sizeLower.includes('(mm)') || sizeLower.includes('mm')) {
+                        rawUnit = 'mm';
+                    }
+                    else if (sizeLower.includes('(ft)') || sizeLower.includes('ft') || sizeLower.includes('feet')) {
+                        rawUnit = 'feet';
+                    }
+                }
                 const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft'))
                     ? 'feet'
                     : (rawUnit.includes('mm') ? 'mm' : 'inch');
@@ -345,7 +379,7 @@ router.get('/pieces', authMiddleware_1.authenticate, async (req, res) => {
 router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { projectId } = req.params;
-        const cacheKey = `slabs_project_${projectId}`;
+        const cacheKey = `slabs_project_v3_${projectId}`;
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
@@ -367,8 +401,65 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         { slabId: { $in: slabObjIds } }
                     ]
                 }).sort({ pieceNumber: 1 }).toArray();
+                const sourceMatIds = rawPieces.map((p) => p.sourceMaterialId).filter(Boolean);
+                const sourceMatObjIds = sourceMatIds
+                    .filter((id) => mongoose.Types.ObjectId.isValid(id?.toString()))
+                    .map((id) => new mongoose.Types.ObjectId(id.toString()));
+                const allSourceMatLookup = Array.from(new Set([...sourceMatIds.map((id) => id.toString()), ...sourceMatObjIds]));
+                const slabInvIds = rawSlabs.map((s) => s.inventoryId).filter(Boolean);
+                const rawProjMats = allSourceMatLookup.length > 0
+                    ? await db.collection('ProjectMaterial').find({
+                        $or: [
+                            { _id: { $in: allSourceMatLookup } },
+                            { id: { $in: sourceMatIds.map((id) => id.toString()) } }
+                        ]
+                    }).toArray()
+                    : [];
+                const invIds = Array.from(new Set([
+                    ...rawProjMats.map((pm) => pm.inventoryId).filter(Boolean),
+                    ...slabInvIds
+                ]));
+                const invObjIds = invIds
+                    .filter((id) => mongoose.Types.ObjectId.isValid(id?.toString()))
+                    .map((id) => new mongoose.Types.ObjectId(id.toString()));
+                const allInvLookup = Array.from(new Set([...invIds.map((id) => id.toString()), ...invObjIds]));
+                const rawInvs = allInvLookup.length > 0
+                    ? await db.collection('Inventory').find({
+                        $or: [
+                            { _id: { $in: allInvLookup } },
+                            { id: { $in: invIds.map((id) => id.toString()) } }
+                        ]
+                    }).toArray()
+                    : [];
+                const invMap = new Map();
+                rawInvs.forEach((inv) => {
+                    invMap.set(inv._id.toString(), {
+                        id: inv._id.toString(),
+                        itemName: inv.itemName,
+                        blockNumber: inv.blockNumber,
+                        length: inv.length,
+                        width: inv.width,
+                        thickness: inv.thickness,
+                        unit: inv.unit,
+                        jobWorkType: inv.jobWorkType,
+                        supplier: inv.supplier
+                    });
+                });
+                const projMatMap = new Map();
+                rawProjMats.forEach((pm) => {
+                    const invKey = pm.inventoryId?.toString();
+                    projMatMap.set(pm._id.toString(), {
+                        id: pm._id.toString(),
+                        projectId: pm.projectId?.toString(),
+                        inventoryId: invKey,
+                        quantity: pm.quantity,
+                        usedQuantity: pm.usedQuantity,
+                        inventory: invMap.get(invKey) || null
+                    });
+                });
                 const pieceMap = new Map();
                 rawPieces.forEach((p) => {
+                    const smId = p.sourceMaterialId?.toString();
                     const pObj = {
                         id: p._id.toString(),
                         pieceNumber: p.pieceNumber,
@@ -376,6 +467,9 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         size: p.size,
                         stage: p.stage,
                         status: p.status,
+                        sourceMaterialId: smId || null,
+                        vendorName: p.vendorName || null,
+                        sourceMaterial: smId ? (projMatMap.get(smId) || null) : null,
                         logs: p.logs || []
                     };
                     const sKey = p.slabId?.toString();
@@ -383,17 +477,22 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         pieceMap.set(sKey, []);
                     pieceMap.get(sKey).push(pObj);
                 });
-                slabs = rawSlabs.map((s) => ({
-                    id: s._id.toString(),
-                    projectId: s.projectId?.toString() || s.projectId,
-                    name: s.name,
-                    size: s.size,
-                    cost: s.cost,
-                    status: s.status,
-                    requiredStages: s.requiredStages,
-                    createdAt: s.createdAt,
-                    pieces: pieceMap.get(s._id.toString()) || []
-                }));
+                slabs = rawSlabs.map((s) => {
+                    const slabInvKey = s.inventoryId?.toString();
+                    return {
+                        id: s._id.toString(),
+                        projectId: s.projectId?.toString() || s.projectId,
+                        inventoryId: slabInvKey || null,
+                        inventory: slabInvKey ? (invMap.get(slabInvKey) || null) : null,
+                        name: s.name,
+                        size: s.size,
+                        cost: s.cost,
+                        status: s.status,
+                        requiredStages: s.requiredStages,
+                        createdAt: s.createdAt,
+                        pieces: pieceMap.get(s._id.toString()) || []
+                    };
+                });
                 fastCache_1.fastCache.set(cacheKey, slabs, 30);
                 return res.json(slabs);
             }
@@ -404,23 +503,15 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         const prismaSlabs = await index_1.prisma.slab.findMany({
             where: { projectId: String(projectId) },
             orderBy: { createdAt: 'asc' },
-            select: {
-                id: true,
-                projectId: true,
-                name: true,
-                size: true,
-                cost: true,
-                status: true,
-                requiredStages: true,
-                createdAt: true,
+            include: {
+                inventory: true,
                 pieces: {
-                    select: {
-                        id: true,
-                        pieceNumber: true,
-                        productName: true,
-                        size: true,
-                        stage: true,
-                        status: true,
+                    include: {
+                        sourceMaterial: {
+                            include: {
+                                inventory: true
+                            }
+                        },
                         logs: {
                             select: {
                                 id: true,

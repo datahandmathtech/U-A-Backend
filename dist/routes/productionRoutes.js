@@ -5,6 +5,7 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const fastCache_1 = require("../utils/fastCache");
+const cloudinaryHelper_1 = require("../utils/cloudinaryHelper");
 const router = (0, express_1.Router)();
 // Get production logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -441,6 +442,7 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
         if (transactionType === 'OUT' && requiresMachine === false) {
             transactionType = 'IN';
         }
+        startPhotos = await (0, cloudinaryHelper_1.sanitizePhotos)(startPhotos);
         let projectId = undefined;
         if (parentLogId && toValidObjectId(parentLogId)) {
             const parentLog = await index_1.prisma.productionLog.findUnique({
@@ -661,7 +663,7 @@ router.get('/pending-approvals', authMiddleware_1.authenticate, async (req, res)
                     project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
                     machine: l.machineId ? machineMap.get(l.machineId.toString()) : null
                 }));
-                fastCache_1.fastCache.set('prod_pending_approvals', pendingLogs, 15);
+                fastCache_1.fastCache.set('prod_pending_approvals', pendingLogs, 120);
                 return res.json(pendingLogs);
             }
             catch (err) {
@@ -677,7 +679,7 @@ router.get('/pending-approvals', authMiddleware_1.authenticate, async (req, res)
                 machine: { select: { name: true } }
             }
         });
-        fastCache_1.fastCache.set('prod_pending_approvals', pendingLogs, 15);
+        fastCache_1.fastCache.set('prod_pending_approvals', pendingLogs, 120);
         res.json(pendingLogs);
     }
     catch (error) {

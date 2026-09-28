@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
 import { fastCache } from '../utils/fastCache';
+import { sanitizePhotos } from '../utils/cloudinaryHelper';
 
 const router = Router();
 
@@ -483,6 +484,8 @@ router.post('/material-log', authenticate, async (req, res) => {
       transactionType = 'IN';
     }
 
+    startPhotos = await sanitizePhotos(startPhotos);
+
     let projectId: string | undefined = undefined;
     if (parentLogId && toValidObjectId(parentLogId)) {
       const parentLog = await prisma.productionLog.findUnique({
@@ -698,7 +701,7 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
           machine: l.machineId ? machineMap.get(l.machineId.toString()) : null
         }));
 
-        fastCache.set('prod_pending_approvals', pendingLogs, 15);
+        fastCache.set('prod_pending_approvals', pendingLogs, 120);
         return res.json(pendingLogs);
       } catch (err) {
         console.warn('Mongoose pending approvals query failed, falling back to Prisma:', err);
@@ -715,7 +718,7 @@ router.get('/pending-approvals', authenticate, async (req, res) => {
       }
     });
 
-    fastCache.set('prod_pending_approvals', pendingLogs, 15);
+    fastCache.set('prod_pending_approvals', pendingLogs, 120);
     res.json(pendingLogs);
   } catch (error) {
     res.status(500).json({ message: 'Server error fetching pending approvals' });

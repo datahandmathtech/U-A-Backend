@@ -36,7 +36,22 @@ async function autoSplitActiveMachineLogs() {
         }));
         const now = new Date();
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 5 hours 30 mins (Asia/Kolkata)
+        // Ensure only 1 active log per machine is processed for carry-forward
+        const seenMachineIds = new Set();
+        const uniqueActiveLogs = [];
         for (const log of activeLogs) {
+            if (!log.machineId)
+                continue;
+            const mId = log.machineId.toString();
+            if (seenMachineIds.has(mId)) {
+                // Close duplicate active log for this machine to maintain data integrity
+                await db.collection('MachineLog').updateOne({ _id: new mongoose.Types.ObjectId(log.id) }, { $set: { status: 'completed', endTime: new Date(log.startTime), remarks: 'Closed duplicate machine log', updatedAt: new Date() } });
+                continue;
+            }
+            seenMachineIds.add(mId);
+            uniqueActiveLogs.push(log);
+        }
+        for (const log of uniqueActiveLogs) {
             if (!log.machineId)
                 continue;
             let currentLogId = log.id;
@@ -64,11 +79,12 @@ async function autoSplitActiveMachineLogs() {
                     if (runHours > 0) {
                         await db.collection('Machine').updateOne({ _id: new mongoose.Types.ObjectId(log.machineId) }, { $inc: { totalRunHours: runHours }, $set: { updatedAt: new Date() } });
                     }
-                    // Deduplication: ensure an active log does not already exist for this machine on nextDayStart
+                    // Deduplication: ensure an active log does not already exist for this machine
+                    const mObjId = new mongoose.Types.ObjectId(log.machineId);
                     const existingActive = await db.collection('MachineLog').findOne({
-                        machineId: new mongoose.Types.ObjectId(log.machineId),
+                        $or: [{ machineId: mObjId }, { machineId: log.machineId.toString() }],
                         status: 'active',
-                        startTime: nextDayStart
+                        startTime: { $gte: nextDayStart }
                     });
                     if (existingActive) {
                         currentLogId = existingActive._id.toString();

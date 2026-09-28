@@ -4,6 +4,7 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const fastCache_1 = require("../utils/fastCache");
+const cloudinaryHelper_1 = require("../utils/cloudinaryHelper");
 const router = (0, express_1.Router)();
 // Get Machine Logs
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -16,7 +17,16 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
         let db = mongoose.connection?.db;
         if (db) {
             try {
-                const rawLogs = await db.collection('MachineLog').find({}).sort({ createdAt: -1 }).toArray();
+                const rawLogs = await db.collection('MachineLog').find({}, {
+                    projection: {
+                        machinePhotoUrl: 0,
+                        unitPhotoUrl: 0,
+                        softwarePhotoUrl: 0,
+                        endMachinePhotoUrl: 0,
+                        endUnitPhotoUrl: 0,
+                        endSoftwarePhotoUrl: 0
+                    }
+                }).sort({ createdAt: -1 }).toArray();
                 const machineIds = rawLogs.map((l) => l.machineId).filter(Boolean);
                 const projectIds = rawLogs.map((l) => l.projectId).filter(Boolean);
                 const operatorIds = rawLogs.map((l) => l.operatorId).filter(Boolean);
@@ -58,15 +68,9 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     downtime: l.downtime,
                     quantityProduced: l.quantityProduced,
                     operatorId: l.operatorId ? l.operatorId.toString() : null,
-                    machinePhotoUrl: l.machinePhotoUrl,
-                    unitPhotoUrl: l.unitPhotoUrl,
-                    softwarePhotoUrl: l.softwarePhotoUrl,
-                    endMachinePhotoUrl: l.endMachinePhotoUrl,
-                    endUnitPhotoUrl: l.endUnitPhotoUrl,
-                    endSoftwarePhotoUrl: l.endSoftwarePhotoUrl,
                     status: l.status,
                     approvalStatus: l.approvalStatus,
-                    isCarryForward: l.isCarryForward,
+                    isCarryForward: Boolean(l.isCarryForward),
                     parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
                     remarks: l.remarks,
                     createdAt: l.createdAt,
@@ -74,7 +78,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
                     operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
                 }));
-                fastCache_1.fastCache.set('all_machine_logs', logs, 15);
+                fastCache_1.fastCache.set('all_machine_logs', logs, 10);
                 return res.json(logs);
             }
             catch (err) {
@@ -82,7 +86,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             }
         }
         if (logs.length === 0) {
-            logs = await index_1.prisma.machineLog.findMany({
+            const rawPrisma = await index_1.prisma.machineLog.findMany({
                 orderBy: { createdAt: 'desc' },
                 select: {
                     id: true,
@@ -113,8 +117,12 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     operator: { select: { id: true, name: true, staffId: true } }
                 }
             });
+            logs = rawPrisma.map((l) => ({
+                ...l,
+                isCarryForward: Boolean(l.isCarryForward)
+            }));
         }
-        fastCache_1.fastCache.set('all_machine_logs', logs, 120);
+        fastCache_1.fastCache.set('all_machine_logs', logs, 10);
         res.json(logs);
     }
     catch (error) {
@@ -168,23 +176,30 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-In (One-Step workflow for worker)
 router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours } = req.body;
-        const operatorId = req.user?.id;
+        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours, operatorId: customOperatorId, startTime: customStartTime } = req.body;
+        const operatorId = customOperatorId || req.user?.id;
+        const startTime = customStartTime ? new Date(customStartTime) : new Date();
+        const [cleanMachinePhoto, cleanUnitPhoto, cleanSoftwarePhoto] = await Promise.all([
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(machinePhotoUrl),
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(unitPhotoUrl),
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(softwarePhotoUrl)
+        ]);
         const newLog = await index_1.prisma.machineLog.create({
             data: {
                 machineId,
-                startTime: new Date(),
+                startTime: startTime,
                 estimatedHours: estimatedHours ? Number(estimatedHours) : null,
-                machinePhotoUrl,
-                unitPhotoUrl,
-                softwarePhotoUrl,
+                machinePhotoUrl: cleanMachinePhoto,
+                unitPhotoUrl: cleanUnitPhoto,
+                softwarePhotoUrl: cleanSoftwarePhoto,
                 remarks,
                 operatorId,
                 projectId,
                 productId,
                 productName,
                 status: 'active',
-                approvalStatus: 'in_progress'
+                approvalStatus: 'in_progress',
+                isCarryForward: false
             }
         });
         fastCache_1.fastCache.invalidate('all_machine_logs');
@@ -234,6 +249,7 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
                     machineId: l.machineId ? l.machineId.toString() : null,
                     projectId: l.projectId ? l.projectId.toString() : null,
                     operatorId: l.operatorId ? l.operatorId.toString() : null,
+                    isCarryForward: Boolean(l.isCarryForward),
                     machine: l.machineId ? machineMap.get(l.machineId.toString()) : null,
                     project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
                     operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
@@ -258,7 +274,11 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
                 operator: { select: { name: true, staffId: true } }
             }
         });
-        res.json(dailyLogs);
+        const enrichedDailyLogs = dailyLogs.map((l) => ({
+            ...l,
+            isCarryForward: Boolean(l.isCarryForward)
+        }));
+        res.json(enrichedDailyLogs);
     }
     catch (error) {
         console.error(error);
@@ -268,7 +288,7 @@ router.get('/daily-logs', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
+        const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced, endTime: customEndTime, projectId, productId, productName } = req.body;
         let log = await index_1.prisma.machineLog.findFirst({
             where: { id: logId, status: 'active' }
         });
@@ -285,18 +305,29 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
         }
         if (!log)
             return res.status(404).json({ message: 'Active machine log not found' });
-        const endTime = new Date();
-        const hours = (endTime.getTime() - log.startTime.getTime()) / (1000 * 60 * 60);
+        const endTime = customEndTime ? new Date(customEndTime) : new Date();
+        const hours = Math.max(0, (endTime.getTime() - log.startTime.getTime()) / (1000 * 60 * 60));
+        const effectiveProjectId = projectId !== undefined ? (projectId || null) : log.projectId;
+        const effectiveProductId = productId !== undefined ? (productId || null) : log.productId;
+        const effectiveProductName = productName !== undefined ? (productName || null) : log.productName;
+        const [cleanEndMachinePhoto, cleanEndUnitPhoto, cleanEndSoftwarePhoto] = await Promise.all([
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(endMachinePhotoUrl),
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(endUnitPhotoUrl),
+            (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(endSoftwarePhotoUrl)
+        ]);
         const updatedLog = await index_1.prisma.machineLog.update({
             where: { id: log.id },
             data: {
                 endTime: endTime,
                 status: 'completed',
                 approvalStatus: 'pending',
+                projectId: effectiveProjectId,
+                productId: effectiveProductId,
+                productName: effectiveProductName,
                 remarks: remarks ? `${log.remarks || ''}\nOut: ${remarks}`.trim() : log.remarks,
-                endMachinePhotoUrl,
-                endUnitPhotoUrl,
-                endSoftwarePhotoUrl,
+                endMachinePhotoUrl: cleanEndMachinePhoto,
+                endUnitPhotoUrl: cleanEndUnitPhoto,
+                endSoftwarePhotoUrl: cleanEndSoftwarePhoto,
                 quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1
             }
         });
@@ -307,17 +338,17 @@ router.post('/clock-out', authMiddleware_1.authenticate, async (req, res) => {
         // Also create a production log so it goes to the Admin Approvals tab
         await index_1.prisma.productionLog.create({
             data: {
-                projectId: log.projectId,
-                productId: log.productId,
-                productName: log.productName,
+                projectId: effectiveProjectId,
+                productId: effectiveProductId,
+                productName: effectiveProductName,
                 machineId: log.machineId,
                 stage: 'Production Work',
                 quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1,
                 transactionType: 'IN',
                 startPhotos: {
-                    machine: endMachinePhotoUrl,
-                    unit: endUnitPhotoUrl,
-                    software: endSoftwarePhotoUrl
+                    machine: cleanEndMachinePhoto,
+                    unit: cleanEndUnitPhoto,
+                    software: cleanEndSoftwarePhoto
                 },
                 workerId: log.operatorId,
                 parentLogId: log.id,
@@ -391,12 +422,50 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         res.status(500).json({ message: 'Server error editing log' });
     }
 });
+// Get Single Log with Photos
+router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const l = await db.collection('MachineLog').findOne({ _id: new mongoose.Types.ObjectId(req.params.id) });
+                if (l)
+                    return res.json({ ...l, id: l._id.toString() });
+            }
+            catch (err) { }
+        }
+        const log = await index_1.prisma.machineLog.findUnique({
+            where: { id: req.params.id },
+            include: { machine: true, project: true, operator: true }
+        });
+        if (!log)
+            return res.status(404).json({ message: 'Log not found' });
+        res.json(log);
+    }
+    catch (error) {
+        res.status(500).json({ message: 'Server error fetching log details' });
+    }
+});
 // Admin: Delete Log
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        await index_1.prisma.machineLog.delete({
-            where: { id: req.params.id }
-        });
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            try {
+                await db.collection('MachineLog').deleteOne({ _id: new mongoose.Types.ObjectId(req.params.id) });
+            }
+            catch (err) { }
+        }
+        try {
+            await index_1.prisma.machineLog.delete({
+                where: { id: req.params.id }
+            });
+        }
+        catch (pErr) {
+            // Ignore if record already deleted
+        }
         fastCache_1.fastCache.invalidate('all_machine_logs');
         fastCache_1.fastCache.invalidate('live_feed');
         res.json({ message: 'Machine log deleted successfully' });

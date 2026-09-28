@@ -14,18 +14,25 @@ router.get('/:projectId', async (req, res) => {
         let db = mongoose.connection?.db;
         if (db) {
             try {
-                const rawDrawings = await db.collection('ShopDrawing').find({ projectId: String(projectId) }).sort({ createdAt: -1 }).toArray();
-                const drawingIds = rawDrawings.map((d) => d._id.toString());
-                const rawApprovals = await db.collection('DrawingApproval').find({ drawingId: { $in: drawingIds } }).toArray();
+                const pIdQuery = mongoose.Types.ObjectId.isValid(projectId)
+                    ? { $in: [projectId, new mongoose.Types.ObjectId(projectId)] }
+                    : projectId;
+                const rawDrawings = await db.collection('ShopDrawing').find({ projectId: pIdQuery }).sort({ createdAt: -1 }).toArray();
+                const drawingObjIds = rawDrawings.map((d) => d._id);
+                const drawingStringIds = rawDrawings.map((d) => d._id.toString());
+                const rawApprovals = await db.collection('DrawingApproval').find({
+                    drawingId: { $in: [...drawingStringIds, ...drawingObjIds] }
+                }).toArray();
                 const appMap = new Map();
                 rawApprovals.forEach((a) => {
-                    if (!appMap.has(a.drawingId))
-                        appMap.set(a.drawingId, []);
-                    appMap.get(a.drawingId).push({ ...a, id: a._id.toString() });
+                    const key = a.drawingId?.toString();
+                    if (!appMap.has(key))
+                        appMap.set(key, []);
+                    appMap.get(key).push({ ...a, id: a._id.toString() });
                 });
                 const enriched = rawDrawings.map((d) => ({
                     id: d._id.toString(),
-                    projectId: d.projectId,
+                    projectId: d.projectId?.toString() || d.projectId,
                     title: d.title,
                     type: d.type,
                     fileUrl: d.fileUrl,
@@ -57,7 +64,30 @@ router.get('/:projectId', async (req, res) => {
 router.post('/', async (req, res) => {
     try {
         const { projectId, title, type, fileUrl, comments } = req.body;
-        // Check if drawing with same title exists to increment version
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            const pId = mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : projectId;
+            const existing = await db.collection('ShopDrawing').find({
+                projectId: { $in: [projectId, pId] },
+                title
+            }).sort({ version: -1 }).limit(1).toArray();
+            const version = existing.length > 0 ? (existing[0].version || 1) + 1 : 1;
+            const newDoc = {
+                projectId: pId,
+                title,
+                type,
+                fileUrl,
+                comments: comments || null,
+                version,
+                status: 'Pending',
+                createdAt: new Date(),
+                updatedAt: new Date()
+            };
+            const result = await db.collection('ShopDrawing').insertOne(newDoc);
+            return res.status(201).json({ ...newDoc, id: result.insertedId.toString() });
+        }
+        // fallback to prisma
         const existing = await index_1.prisma.shopDrawing.findFirst({
             where: { projectId, title },
             orderBy: { version: 'desc' }
@@ -76,6 +106,7 @@ router.post('/', async (req, res) => {
         res.status(201).json(drawing);
     }
     catch (err) {
+        console.error('Failed to upload drawing:', err);
         res.status(500).json({ error: 'Failed to upload drawing' });
     }
 });
@@ -84,6 +115,24 @@ router.post('/:id/approve', async (req, res) => {
     try {
         const { id } = req.params;
         const { approvedBy, status, notes } = req.body; // status: Approved, Rejected, Changes Requested
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            const objId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+            await db.collection('ShopDrawing').updateOne({ $or: [{ _id: objId }, { _id: id }] }, { $set: { status, updatedAt: new Date() } });
+            const drawing = await db.collection('ShopDrawing').findOne({ $or: [{ _id: objId }, { _id: id }] });
+            const approvalDoc = {
+                projectId: drawing?.projectId,
+                drawingId: id,
+                shopDrawingId: id,
+                approvedBy,
+                status,
+                notes: notes || null,
+                date: new Date()
+            };
+            await db.collection('DrawingApproval').insertOne(approvalDoc);
+            return res.json({ drawing: { ...drawing, id: drawing?._id.toString() }, approval: approvalDoc });
+        }
         const drawing = await index_1.prisma.shopDrawing.findUnique({ where: { id } });
         if (!drawing)
             return res.status(404).json({ error: 'Drawing not found' });
@@ -112,14 +161,33 @@ router.post('/:id/approve', async (req, res) => {
 router.patch('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, comments } = req.body;
+        const { title, comments, fileUrl } = req.body;
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            const objId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+            const updateData = {};
+            if (title !== undefined)
+                updateData.title = title;
+            if (comments !== undefined)
+                updateData.comments = comments;
+            if (fileUrl !== undefined)
+                updateData.fileUrl = fileUrl;
+            updateData.updatedAt = new Date();
+            await db.collection('ShopDrawing').updateOne({ $or: [{ _id: objId }, { _id: id }] }, { $set: updateData });
+            const doc = await db.collection('ShopDrawing').findOne({ $or: [{ _id: objId }, { _id: id }] });
+            if (doc) {
+                return res.json({ ...doc, id: doc._id.toString() });
+            }
+        }
         const updated = await index_1.prisma.shopDrawing.update({
             where: { id },
-            data: { title, comments }
+            data: { title, comments, ...(fileUrl ? { fileUrl } : {}) }
         });
         res.json(updated);
     }
     catch (err) {
+        console.error('Failed to update drawing:', err);
         res.status(500).json({ error: 'Failed to update drawing' });
     }
 });
@@ -127,16 +195,29 @@ router.patch('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (db) {
+            const objId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+            await db.collection('DrawingApproval').deleteMany({
+                $or: [{ drawingId: id }, { drawingId: objId }, { shopDrawingId: id }, { shopDrawingId: objId }]
+            });
+            await db.collection('ShopDrawing').deleteOne({
+                $or: [{ _id: objId }, { _id: id }]
+            });
+            return res.json({ message: 'Drawing deleted successfully' });
+        }
         // First delete any approval records associated with it
         await index_1.prisma.approvalRecord.deleteMany({
             where: { shopDrawingId: id }
-        });
+        }).catch(() => { });
         await index_1.prisma.shopDrawing.delete({
             where: { id }
-        });
+        }).catch(() => { });
         res.json({ message: 'Drawing deleted successfully' });
     }
     catch (err) {
+        console.error('Failed to delete drawing:', err);
         res.status(500).json({ error: 'Failed to delete drawing' });
     }
 });

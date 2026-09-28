@@ -3,17 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
-const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get live factory feed (Machine Logs for Selected Date) - Optimized with fast in-memory cache
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const dateParam = req.query.date || '';
-        const cacheKey = `live_feed_${dateParam}`;
-        const cached = fastCache_1.fastCache.get(cacheKey);
-        if (cached) {
-            return res.json(cached);
-        }
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         let startOfDay;
         let endOfDay;
         if (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
@@ -21,13 +16,17 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             const y = parts[0] || 2026;
             const m = parts[1] || 1;
             const d = parts[2] || 1;
-            startOfDay = new Date(y, m - 1, d, 0, 0, 0, 0);
-            endOfDay = new Date(y, m - 1, d, 23, 59, 59, 999);
+            startOfDay = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+            endOfDay = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - IST_OFFSET_MS);
         }
         else {
             const now = new Date();
-            startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-            endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+            const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+            const y = istNow.getUTCFullYear();
+            const m = istNow.getUTCMonth();
+            const d = istNow.getUTCDate();
+            startOfDay = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+            endOfDay = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
         }
         const dateWhere = {
             startTime: { lte: endOfDay },
@@ -80,25 +79,46 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 rawProjects.forEach((p) => projectMap.set(p._id.toString(), { id: p._id.toString(), name: p.name, projectId: p.projectId, clientName: p.clientName }));
                 const userMap = new Map();
                 rawUsers.forEach((u) => userMap.set(u._id.toString(), { id: u._id.toString(), name: u.name, staffId: u.staffId, role: u.role, department: u.department }));
-                // Batch lookup root parent logs with Mongoose for true original start time
-                const parentIds = Array.from(new Set(rawLogs.map((l) => l.parentLogId).filter(Boolean)));
-                const rootParentsMap = new Map();
-                if (parentIds.length > 0) {
-                    const parentObjIds = parentIds.filter((pId) => mongoose.Types.ObjectId.isValid(pId)).map((pId) => new mongoose.Types.ObjectId(pId));
+                // Recursive lookup for root parent logs to find TRUE original start time
+                let currentParentIds = Array.from(new Set(rawLogs.map((l) => l.parentLogId?.toString()).filter(Boolean)));
+                const allParentsMap = new Map();
+                let hops = 0;
+                while (currentParentIds.length > 0 && hops++ < 10) {
+                    const missingIds = currentParentIds.filter((id) => !allParentsMap.has(id));
+                    if (missingIds.length === 0)
+                        break;
+                    const parentObjIds = missingIds.filter((pId) => mongoose.Types.ObjectId.isValid(pId)).map((pId) => new mongoose.Types.ObjectId(pId));
                     const parentDocs = await db.collection('MachineLog').find({
                         $or: [
                             { _id: { $in: parentObjIds } },
-                            { id: { $in: parentIds } }
+                            { id: { $in: missingIds } }
                         ]
-                    }, { projection: { startTime: 1, parentLogId: 1, operatorId: 1 } }).toArray();
-                    parentDocs.forEach((p) => {
-                        const op = p.operatorId ? userMap.get(p.operatorId.toString()) : null;
-                        rootParentsMap.set(p._id.toString(), {
-                            id: p._id.toString(),
-                            startTime: p.startTime,
-                            parentLogId: p.parentLogId,
-                            operator: op
-                        });
+                    }, { projection: { startTime: 1, parentLogId: 1, operatorId: 1, machineId: 1 } }).toArray();
+                    if (parentDocs.length === 0)
+                        break;
+                    const nextParentIds = [];
+                    for (const doc of parentDocs) {
+                        allParentsMap.set(doc._id.toString(), doc);
+                        if (doc.parentLogId)
+                            nextParentIds.push(doc.parentLogId.toString());
+                    }
+                    currentParentIds = nextParentIds;
+                }
+                // Fetch any missing operators for root parents
+                const extraOpIds = Array.from(allParentsMap.values()).map(p => p.operatorId).filter(Boolean);
+                if (extraOpIds.length > 0) {
+                    const extraUsers = await db.collection('User').find({
+                        _id: { $in: extraOpIds.map((id) => { try {
+                                return new mongoose.Types.ObjectId(id);
+                            }
+                            catch {
+                                return id;
+                            } }) }
+                    }).toArray();
+                    extraUsers.forEach((u) => {
+                        if (!userMap.has(u._id.toString())) {
+                            userMap.set(u._id.toString(), { id: u._id.toString(), name: u.name, staffId: u.staffId, role: u.role, department: u.department });
+                        }
                     });
                 }
                 const enrichedLogs = rawLogs.map((l) => {
@@ -106,9 +126,19 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     const mId = l.machineId ? l.machineId.toString() : null;
                     const pId = l.projectId ? l.projectId.toString() : null;
                     const opId = l.operatorId ? l.operatorId.toString() : null;
-                    const parentId = l.parentLogId ? l.parentLogId.toString() : null;
-                    const rootParent = parentId ? rootParentsMap.get(parentId) : null;
+                    // Recursively traverse to find root parent
+                    let rootLog = l;
+                    let currentParentId = l.parentLogId?.toString();
+                    const visited = new Set();
+                    while (currentParentId && allParentsMap.has(currentParentId) && !visited.has(currentParentId)) {
+                        visited.add(currentParentId);
+                        const parent = allParentsMap.get(currentParentId);
+                        rootLog = parent;
+                        currentParentId = parent.parentLogId?.toString();
+                    }
                     const operator = opId ? userMap.get(opId) : null;
+                    const rootOperatorId = rootLog.operatorId ? rootLog.operatorId.toString() : null;
+                    const initialOperator = rootOperatorId ? (userMap.get(rootOperatorId) || operator) : operator;
                     return {
                         id,
                         machineId: mId,
@@ -129,18 +159,17 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                         endSoftwarePhotoUrl: l.endSoftwarePhotoUrl,
                         status: l.status,
                         approvalStatus: l.approvalStatus,
-                        isCarryForward: l.isCarryForward,
-                        parentLogId: parentId,
+                        isCarryForward: Boolean(l.isCarryForward),
+                        parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
                         remarks: l.remarks,
                         createdAt: l.createdAt,
                         machine: mId ? machineMap.get(mId) : null,
                         project: pId ? projectMap.get(pId) : null,
                         operator,
-                        initialStartTime: rootParent?.startTime || l.startTime,
-                        initialOperator: rootParent?.operator || operator
+                        initialStartTime: rootLog?.startTime || l.startTime,
+                        initialOperator
                     };
                 });
-                fastCache_1.fastCache.set(cacheKey, enrichedLogs, 15);
                 return res.json(enrichedLogs);
             }
             catch (err) {
@@ -202,8 +231,25 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             },
             orderBy: { startTime: 'desc' }
         });
-        fastCache_1.fastCache.set(cacheKey, prismaLogs, 10);
-        res.json(prismaLogs);
+        const parentIds = Array.from(new Set(prismaLogs.map((l) => l.parentLogId).filter(Boolean)));
+        const prismaParentsMap = new Map();
+        if (parentIds.length > 0) {
+            const parents = await index_1.prisma.machineLog.findMany({
+                where: { id: { in: parentIds } },
+                select: { id: true, startTime: true, parentLogId: true, operator: { select: { id: true, name: true, staffId: true } } }
+            });
+            parents.forEach((p) => prismaParentsMap.set(p.id, p));
+        }
+        const enrichedPrismaLogs = prismaLogs.map((l) => {
+            const root = l.parentLogId ? prismaParentsMap.get(l.parentLogId) : null;
+            return {
+                ...l,
+                isCarryForward: Boolean(l.isCarryForward),
+                initialStartTime: root?.startTime || l.startTime,
+                initialOperator: root?.operator || l.operator
+            };
+        });
+        res.json(enrichedPrismaLogs);
     }
     catch (error) {
         console.error('Live Feed Error:', error);

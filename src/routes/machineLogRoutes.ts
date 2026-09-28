@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
 import { fastCache } from '../utils/fastCache';
+import { uploadBase64ToCloudinary } from '../utils/cloudinaryHelper';
 
 const router = Router();
 
@@ -19,7 +20,16 @@ router.get('/', authenticate, async (req, res) => {
 
     if (db) {
       try {
-        const rawLogs = await db.collection('MachineLog').find({}).sort({ createdAt: -1 }).toArray();
+        const rawLogs = await db.collection('MachineLog').find({}, {
+          projection: {
+            machinePhotoUrl: 0,
+            unitPhotoUrl: 0,
+            softwarePhotoUrl: 0,
+            endMachinePhotoUrl: 0,
+            endUnitPhotoUrl: 0,
+            endSoftwarePhotoUrl: 0
+          }
+        }).sort({ createdAt: -1 }).toArray();
         const machineIds = rawLogs.map((l: any) => l.machineId).filter(Boolean);
         const projectIds = rawLogs.map((l: any) => l.projectId).filter(Boolean);
         const operatorIds = rawLogs.map((l: any) => l.operatorId).filter(Boolean);
@@ -51,15 +61,9 @@ router.get('/', authenticate, async (req, res) => {
           downtime: l.downtime,
           quantityProduced: l.quantityProduced,
           operatorId: l.operatorId ? l.operatorId.toString() : null,
-          machinePhotoUrl: l.machinePhotoUrl,
-          unitPhotoUrl: l.unitPhotoUrl,
-          softwarePhotoUrl: l.softwarePhotoUrl,
-          endMachinePhotoUrl: l.endMachinePhotoUrl,
-          endUnitPhotoUrl: l.endUnitPhotoUrl,
-          endSoftwarePhotoUrl: l.endSoftwarePhotoUrl,
           status: l.status,
           approvalStatus: l.approvalStatus,
-          isCarryForward: l.isCarryForward,
+          isCarryForward: Boolean(l.isCarryForward),
           parentLogId: l.parentLogId ? l.parentLogId.toString() : null,
           remarks: l.remarks,
           createdAt: l.createdAt,
@@ -68,7 +72,7 @@ router.get('/', authenticate, async (req, res) => {
           operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
         }));
 
-        fastCache.set('all_machine_logs', logs, 15);
+        fastCache.set('all_machine_logs', logs, 10);
         return res.json(logs);
       } catch (err) {
         console.warn('Mongoose machine log query failed, falling back to Prisma:', err);
@@ -76,7 +80,7 @@ router.get('/', authenticate, async (req, res) => {
     }
 
     if (logs.length === 0) {
-      logs = await prisma.machineLog.findMany({
+      const rawPrisma = await prisma.machineLog.findMany({
         orderBy: { createdAt: 'desc' },
         select: {
           id: true,
@@ -107,9 +111,13 @@ router.get('/', authenticate, async (req, res) => {
           operator: { select: { id: true, name: true, staffId: true } }
         }
       });
+      logs = rawPrisma.map((l: any) => ({
+        ...l,
+        isCarryForward: Boolean(l.isCarryForward)
+      }));
     }
 
-    fastCache.set('all_machine_logs', logs, 120);
+    fastCache.set('all_machine_logs', logs, 10);
     res.json(logs);
   } catch (error) {
     console.error(error);
@@ -163,24 +171,32 @@ router.post('/', authenticate, async (req, res) => {
 // Machine Clock-In (One-Step workflow for worker)
 router.post('/clock-in', authenticate, async (req, res) => {
   try {
-    const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours } = req.body;
-    const operatorId = (req as any).user?.id;
+    const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours, operatorId: customOperatorId, startTime: customStartTime } = req.body;
+    const operatorId = customOperatorId || (req as any).user?.id;
+    const startTime = customStartTime ? new Date(customStartTime) : new Date();
+
+    const [cleanMachinePhoto, cleanUnitPhoto, cleanSoftwarePhoto] = await Promise.all([
+      uploadBase64ToCloudinary(machinePhotoUrl),
+      uploadBase64ToCloudinary(unitPhotoUrl),
+      uploadBase64ToCloudinary(softwarePhotoUrl)
+    ]);
 
     const newLog = await prisma.machineLog.create({
       data: {
         machineId,
-        startTime: new Date(),
+        startTime: startTime,
         estimatedHours: estimatedHours ? Number(estimatedHours) : null,
-        machinePhotoUrl,
-        unitPhotoUrl,
-        softwarePhotoUrl,
+        machinePhotoUrl: cleanMachinePhoto,
+        unitPhotoUrl: cleanUnitPhoto,
+        softwarePhotoUrl: cleanSoftwarePhoto,
         remarks,
         operatorId,
         projectId,
         productId,
         productName,
         status: 'active',
-        approvalStatus: 'in_progress'
+        approvalStatus: 'in_progress',
+        isCarryForward: false
       }
     });
     
@@ -239,6 +255,7 @@ router.get('/daily-logs', authenticate, async (req, res) => {
           machineId: l.machineId ? l.machineId.toString() : null,
           projectId: l.projectId ? l.projectId.toString() : null,
           operatorId: l.operatorId ? l.operatorId.toString() : null,
+          isCarryForward: Boolean(l.isCarryForward),
           machine: l.machineId ? machineMap.get(l.machineId.toString()) : null,
           project: l.projectId ? projectMap.get(l.projectId.toString()) : null,
           operator: l.operatorId ? userMap.get(l.operatorId.toString()) : null
@@ -264,7 +281,11 @@ router.get('/daily-logs', authenticate, async (req, res) => {
         operator: { select: { name: true, staffId: true } }
       }
     });
-    res.json(dailyLogs);
+    const enrichedDailyLogs = dailyLogs.map((l: any) => ({
+      ...l,
+      isCarryForward: Boolean(l.isCarryForward)
+    }));
+    res.json(enrichedDailyLogs);
   } catch (error) { 
     console.error(error);
     res.status(500).json({ message: 'Server error fetching daily machine logs' });
@@ -274,7 +295,7 @@ router.get('/daily-logs', authenticate, async (req, res) => {
 // Machine Clock-Out (Any user can end an active log)
 router.post('/clock-out', authenticate, async (req, res) => {
   try {
-    const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced } = req.body;
+    const { logId, remarks, endMachinePhotoUrl, endUnitPhotoUrl, endSoftwarePhotoUrl, quantityProduced, endTime: customEndTime, projectId, productId, productName } = req.body;
     
     let log = await prisma.machineLog.findFirst({
       where: { id: logId, status: 'active' }
@@ -294,19 +315,32 @@ router.post('/clock-out', authenticate, async (req, res) => {
     
     if (!log) return res.status(404).json({ message: 'Active machine log not found' });
     
-    const endTime = new Date();
-    const hours = (endTime.getTime() - log.startTime.getTime()) / (1000 * 60 * 60);
+    const endTime = customEndTime ? new Date(customEndTime) : new Date();
+    const hours = Math.max(0, (endTime.getTime() - log.startTime.getTime()) / (1000 * 60 * 60));
+
+    const effectiveProjectId = projectId !== undefined ? (projectId || null) : log.projectId;
+    const effectiveProductId = productId !== undefined ? (productId || null) : log.productId;
+    const effectiveProductName = productName !== undefined ? (productName || null) : log.productName;
     
+    const [cleanEndMachinePhoto, cleanEndUnitPhoto, cleanEndSoftwarePhoto] = await Promise.all([
+      uploadBase64ToCloudinary(endMachinePhotoUrl),
+      uploadBase64ToCloudinary(endUnitPhotoUrl),
+      uploadBase64ToCloudinary(endSoftwarePhotoUrl)
+    ]);
+
     const updatedLog = await prisma.machineLog.update({
       where: { id: log.id },
       data: {
         endTime: endTime,
         status: 'completed',
         approvalStatus: 'pending',
+        projectId: effectiveProjectId,
+        productId: effectiveProductId,
+        productName: effectiveProductName,
         remarks: remarks ? `${log.remarks || ''}\nOut: ${remarks}`.trim() : log.remarks,
-        endMachinePhotoUrl,
-        endUnitPhotoUrl,
-        endSoftwarePhotoUrl,
+        endMachinePhotoUrl: cleanEndMachinePhoto,
+        endUnitPhotoUrl: cleanEndUnitPhoto,
+        endSoftwarePhotoUrl: cleanEndSoftwarePhoto,
         quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1
       }
     });
@@ -319,17 +353,17 @@ router.post('/clock-out', authenticate, async (req, res) => {
     // Also create a production log so it goes to the Admin Approvals tab
     await prisma.productionLog.create({
       data: {
-        projectId: log.projectId,
-        productId: log.productId,
-        productName: log.productName,
+        projectId: effectiveProjectId,
+        productId: effectiveProductId,
+        productName: effectiveProductName,
         machineId: log.machineId,
         stage: 'Production Work',
         quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 1,
         transactionType: 'IN',
         startPhotos: {
-          machine: endMachinePhotoUrl,
-          unit: endUnitPhotoUrl,
-          software: endSoftwarePhotoUrl
+          machine: cleanEndMachinePhoto,
+          unit: cleanEndUnitPhoto,
+          software: cleanEndSoftwarePhoto
         },
         workerId: log.operatorId,
         parentLogId: log.id,
@@ -400,12 +434,45 @@ router.put('/:id', authenticate, async (req, res) => {
   }
 });
 
+// Get Single Log with Photos
+router.get('/:id', authenticate, async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+    if (db) {
+      try {
+        const l = await db.collection('MachineLog').findOne({ _id: new mongoose.Types.ObjectId(req.params.id) });
+        if (l) return res.json({ ...l, id: l._id.toString() });
+      } catch (err) {}
+    }
+    const log = await prisma.machineLog.findUnique({
+      where: { id: req.params.id as string },
+      include: { machine: true, project: true, operator: true }
+    });
+    if (!log) return res.status(404).json({ message: 'Log not found' });
+    res.json(log);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error fetching log details' });
+  }
+});
+
 // Admin: Delete Log
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    await prisma.machineLog.delete({
-      where: { id: req.params.id as string }
-    });
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+    if (db) {
+      try {
+        await db.collection('MachineLog').deleteOne({ _id: new mongoose.Types.ObjectId(req.params.id) });
+      } catch (err) {}
+    }
+    try {
+      await prisma.machineLog.delete({
+        where: { id: req.params.id as string }
+      });
+    } catch (pErr: any) {
+      // Ignore if record already deleted
+    }
     fastCache.invalidate('all_machine_logs');
     fastCache.invalidate('live_feed');
     res.json({ message: 'Machine log deleted successfully' });
