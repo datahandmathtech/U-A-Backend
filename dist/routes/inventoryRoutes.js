@@ -426,6 +426,9 @@ router.post('/deduct', authMiddleware_1.authenticate, async (req, res) => {
         if (pieceId) {
             outRemarks = `[Piece:${pieceId}] ${outRemarks}`;
         }
+        else if (slabId) {
+            outRemarks = `[Slab:${slabId}] ${outRemarks}`;
+        }
         if (length && width) {
             const l = Number(length) || 0;
             const w = Number(width) || 0;
@@ -539,11 +542,14 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                     where: { id: inventory.id },
                     data: { quantity: inventory.quantity + log.quantity }
                 });
-                // 1. Unlink piece if log remarks contained piece info
+                // 1. Unlink piece if log remarks contained piece or slab info
                 if (log.remarks) {
                     const idMatch = log.remarks.match(/\[Piece:([a-f\d]{24})\]/i);
                     const taggedPieceId = (idMatch && idMatch[1]) ? idMatch[1].trim() : '';
+                    const slabIdMatch = log.remarks.match(/\[Slab:([a-f\d]{24})\]/i);
+                    const taggedSlabId = (slabIdMatch && slabIdMatch[1]) ? slabIdMatch[1].trim() : '';
                     let targetProjectId = null;
+                    let affectedSlabId = taggedSlabId || null;
                     if (taggedPieceId) {
                         try {
                             const p = await index_1.prisma.piece.findUnique({
@@ -552,6 +558,7 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                             });
                             if (p) {
                                 targetProjectId = p.slab?.projectId || null;
+                                affectedSlabId = p.slabId || affectedSlabId;
                                 await index_1.prisma.piece.update({
                                     where: { id: taggedPieceId },
                                     data: { sourceMaterialId: null, vendorName: null }
@@ -562,8 +569,26 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                             console.error('Error unlinking tagged piece:', e);
                         }
                     }
+                    else if (taggedSlabId) {
+                        try {
+                            const s = await index_1.prisma.slab.findUnique({
+                                where: { id: taggedSlabId },
+                                include: { pieces: true }
+                            });
+                            if (s) {
+                                targetProjectId = s.projectId || null;
+                                await index_1.prisma.piece.updateMany({
+                                    where: { slabId: taggedSlabId },
+                                    data: { sourceMaterialId: null, vendorName: null }
+                                });
+                            }
+                        }
+                        catch (e) {
+                            console.error('Error unlinking tagged slab pieces:', e);
+                        }
+                    }
                     else {
-                        // Only check brackets if no taggedPieceId
+                        // Only check brackets if no taggedPieceId or taggedSlabId
                         const bracketMatches = Array.from(log.remarks.matchAll(/\(([^)]+)\)/g));
                         for (const m of bracketMatches) {
                             const inside = (m && m[1]) ? m[1].trim() : '';
@@ -575,8 +600,22 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                                     });
                                     if (p) {
                                         targetProjectId = p.slab?.projectId || null;
+                                        affectedSlabId = p.slabId || null;
                                         await index_1.prisma.piece.update({
                                             where: { id: p.id },
+                                            data: { sourceMaterialId: null, vendorName: null }
+                                        });
+                                        break;
+                                    }
+                                    const s = await index_1.prisma.slab.findFirst({
+                                        where: { name: inside },
+                                        include: { pieces: true }
+                                    });
+                                    if (s) {
+                                        targetProjectId = s.projectId || null;
+                                        affectedSlabId = s.id;
+                                        await index_1.prisma.piece.updateMany({
+                                            where: { slabId: s.id },
                                             data: { sourceMaterialId: null, vendorName: null }
                                         });
                                         break;
@@ -586,6 +625,24 @@ router.delete('/logs/:id', authMiddleware_1.authenticate, async (req, res) => {
                                     console.error('Error finding piece by name:', e);
                                 }
                             }
+                        }
+                    }
+                    // If a slab was affected, check if any pieces under it still have allocated raw material
+                    if (affectedSlabId) {
+                        try {
+                            const piecesOfSlab = await index_1.prisma.piece.findMany({
+                                where: { slabId: affectedSlabId }
+                            });
+                            const stillAllocated = piecesOfSlab.some(p => p.sourceMaterialId || p.vendorName);
+                            if (!stillAllocated) {
+                                await index_1.prisma.slab.update({
+                                    where: { id: affectedSlabId },
+                                    data: { inventoryId: null }
+                                }).catch(() => { });
+                            }
+                        }
+                        catch (err) {
+                            console.error('Error clearing slab inventoryId:', err);
                         }
                     }
                     // 2. Decrement ProjectMaterial quantity and usedQuantity for this inventory item
