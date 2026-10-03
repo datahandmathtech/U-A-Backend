@@ -493,8 +493,19 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         pieces: pieceMap.get(s._id.toString()) || []
                     };
                 });
-                fastCache_1.fastCache.set(cacheKey, slabs, 30);
-                return res.json(slabs);
+                // Deduplicate slabs by normalized name to guarantee unique items
+                const seenNames = new Set();
+                const uniqueSlabs = slabs.filter((s) => {
+                    const norm = (s.name || '').trim().toLowerCase();
+                    if (!norm)
+                        return true;
+                    if (seenNames.has(norm))
+                        return false;
+                    seenNames.add(norm);
+                    return true;
+                });
+                fastCache_1.fastCache.set(cacheKey, uniqueSlabs, 30);
+                return res.json(uniqueSlabs);
             }
             catch (err) {
                 console.warn('Mongoose slab query failed, falling back to Prisma:', err);
@@ -524,8 +535,18 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                 }
             }
         });
-        fastCache_1.fastCache.set(cacheKey, prismaSlabs, 60);
-        res.json(prismaSlabs);
+        const seenPrismaNames = new Set();
+        const uniquePrismaSlabs = prismaSlabs.filter((s) => {
+            const norm = (s.name || '').trim().toLowerCase();
+            if (!norm)
+                return true;
+            if (seenPrismaNames.has(norm))
+                return false;
+            seenPrismaNames.add(norm);
+            return true;
+        });
+        fastCache_1.fastCache.set(cacheKey, uniquePrismaSlabs, 60);
+        res.json(uniquePrismaSlabs);
     }
     catch (error) {
         console.error('Error fetching slabs for project:', error);
@@ -539,9 +560,19 @@ router.post('/bulk-create', authMiddleware_1.authenticate, async (req, res) => {
         if (!projectId || !Array.isArray(slabs) || slabs.length === 0) {
             return res.status(400).json({ message: 'projectId and slabs array are required' });
         }
+        const existingSlabs = await index_1.prisma.slab.findMany({
+            where: { projectId: String(projectId) },
+            select: { id: true, name: true }
+        });
+        const existingNames = new Set(existingSlabs.map(s => (s.name || '').trim().toLowerCase()));
         const createdSlabs = [];
         for (const item of slabs) {
             const slabName = item.name || 'Slab';
+            const normName = slabName.trim().toLowerCase();
+            if (existingNames.has(normName)) {
+                continue; // Skip duplicate slab names
+            }
+            existingNames.add(normName);
             const slabSize = item.size || null;
             const reqStages = item.requiredStages && Array.isArray(item.requiredStages) && item.requiredStages.length > 0
                 ? item.requiredStages
@@ -697,6 +728,15 @@ router.post('/replicate-template', authMiddleware_1.authenticate, async (req, re
 router.post('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { projectId, inventoryId, name, size, cost, requiredStages, pieces } = req.body;
+        const existingSlab = await index_1.prisma.slab.findFirst({
+            where: {
+                projectId: String(projectId),
+                name: { equals: name, mode: 'insensitive' }
+            }
+        });
+        if (existingSlab) {
+            return res.status(200).json(existingSlab);
+        }
         // Optional: Deduct from inventory if inventoryId is provided
         if (inventoryId) {
             const inv = await index_1.prisma.inventory.findUnique({ where: { id: inventoryId } });

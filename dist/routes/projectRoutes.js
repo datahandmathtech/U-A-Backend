@@ -407,6 +407,8 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
         // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
         const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
         if (updateData.status && activeStatuses.includes(updateData.status) && updated.slabs.length === 0 && updated.quotations.length > 0) {
+            const existingSlabs = await index_1.prisma.slab.findMany({ where: { projectId: updated.id } });
+            const existingNames = new Set(existingSlabs.map(s => (s.name || '').trim().toLowerCase()));
             const firstQuote = updated.quotations[0];
             if (firstQuote && firstQuote.products) {
                 const products = firstQuote.products;
@@ -414,6 +416,10 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
                     const qty = Number(prod.qty) || 1;
                     for (let i = 1; i <= qty; i++) {
                         const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
+                        const normPieceName = pieceName.trim().toLowerCase();
+                        if (existingNames.has(normPieceName))
+                            continue;
+                        existingNames.add(normPieceName);
                         const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
                         await index_1.prisma.slab.create({
                             data: {

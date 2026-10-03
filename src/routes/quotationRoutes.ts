@@ -214,11 +214,16 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
 
     if (updated.project?.status && activeStatuses.includes(updated.project.status) && updated.project.slabs.length === 0 && updated.products) {
       console.log('Generating slabs...');
+      const existingSlabs = await prisma.slab.findMany({ where: { projectId: updated.projectId } });
+      const existingNames = new Set(existingSlabs.map(s => (s.name || '').trim().toLowerCase()));
       const productsList = updated.products as any[];
       for (const prod of productsList) {
         const qty = Number(prod.qty) || 1;
         for (let i = 1; i <= qty; i++) {
           const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
+          const normPieceName = pieceName.trim().toLowerCase();
+          if (existingNames.has(normPieceName)) continue;
+          existingNames.add(normPieceName);
           const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
           await prisma.slab.create({
             data: {
