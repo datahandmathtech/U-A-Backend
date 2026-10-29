@@ -365,6 +365,7 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
 router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
+        const incomingProducts = Array.isArray(req.body.products) ? req.body.products : null;
         const rawData = { ...req.body };
         // Remove relation / virtual fields that do not exist on the Prisma Project model
         delete rawData.id;
@@ -425,6 +426,142 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
             data: updateData,
             include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
         });
+        // Sync incoming products & slabs if provided during edit
+        if (incomingProducts && incomingProducts.length > 0) {
+            const quotationProducts = incomingProducts
+                .filter((prod) => prod.name && (prod.length || prod.width))
+                .map((prod, i) => {
+                const u = (prod.unit || 'pieces').toLowerCase().trim();
+                const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
+                let isFt = false;
+                let isMM = false;
+                if (isPieces) {
+                    const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
+                    isFt = dimU === 'sq_ft' || dimU === 'feet' || dimU === 'ft';
+                    isMM = dimU === 'mm';
+                }
+                else {
+                    isFt = u.includes('sq') || u.includes('ft') || u.includes('feet');
+                    isMM = u.includes('mm');
+                }
+                const dimUnit = isFt ? 'sq_ft' : (isMM ? 'mm' : 'inch');
+                const l = parseFloat(prod.length) || 0;
+                const w = parseFloat(prod.width) || 0;
+                const sqft = isFt ? l * w : (isMM ? (l * w) / 92903.04 : (l * w) / 144);
+                return {
+                    id: prod.id || `prod_${Date.now()}_${i}`,
+                    category: prod.name,
+                    productName: prod.name,
+                    unit: prod.unit || 'pieces',
+                    dimensionUnit: dimUnit,
+                    length: l,
+                    width: w,
+                    breadth: parseFloat(prod.thickness) || 0,
+                    qty: 1,
+                    rate: 0,
+                    amount: 0,
+                    sqft: Number(sqft.toFixed(2))
+                };
+            });
+            // Update or create quotation
+            const existingQuotes = await index_1.prisma.quotation.findMany({
+                where: { projectId: String(id) },
+                orderBy: { createdAt: 'desc' }
+            });
+            const firstQuote = existingQuotes[0];
+            if (firstQuote) {
+                await index_1.prisma.quotation.update({
+                    where: { id: firstQuote.id },
+                    data: { products: quotationProducts }
+                });
+            }
+            else if (quotationProducts.length > 0) {
+                await index_1.prisma.quotation.create({
+                    data: {
+                        projectId: String(id),
+                        products: quotationProducts,
+                        status: 'approved',
+                        quotationNumber: `Q-${Math.floor(1000 + Math.random() * 9000)}`
+                    }
+                });
+            }
+            // Sync Slabs with incoming products
+            const currentSlabs = await index_1.prisma.slab.findMany({
+                where: { projectId: String(id) },
+                include: { pieces: true }
+            });
+            for (const prod of incomingProducts) {
+                if (!prod.name || (!prod.length && !prod.width))
+                    continue;
+                const u = (prod.unit || 'pieces').toLowerCase().trim();
+                const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
+                let isFt = false;
+                let isMM = false;
+                if (isPieces) {
+                    const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
+                    isFt = dimU === 'sq_ft' || dimU === 'feet' || dimU === 'ft';
+                    isMM = dimU === 'mm';
+                }
+                else {
+                    isFt = u.includes('sq') || u.includes('ft') || u.includes('feet');
+                    isMM = u.includes('mm');
+                }
+                const unitLabel = isFt ? 'Feet' : (isMM ? 'MM' : 'Inch');
+                const l = parseFloat(prod.length) || 0;
+                const w = parseFloat(prod.width) || 0;
+                const calcSqFt = (isFt ? l * w : isMM ? (l * w) / 92903.04 : (l * w) / 144).toFixed(2);
+                const sizeFormatted = `${prod.length || 0}L x ${prod.width || 0}W ${unitLabel}${prod.thickness ? ` | ${prod.thickness}MM` : ''} (${calcSqFt} Sq.Ft)`;
+                let matched = null;
+                if (prod.id) {
+                    matched = currentSlabs.find(s => s.id === prod.id);
+                }
+                if (!matched) {
+                    matched = currentSlabs.find(s => s.name.trim().toLowerCase() === prod.name.trim().toLowerCase());
+                }
+                if (matched) {
+                    await index_1.prisma.slab.update({
+                        where: { id: matched.id },
+                        data: { name: prod.name, size: sizeFormatted }
+                    });
+                    if (matched.pieces.length === 1) {
+                        await index_1.prisma.piece.updateMany({
+                            where: { slabId: matched.id },
+                            data: { size: sizeFormatted, productName: `${prod.name} 1.1 (Full Slab)` }
+                        });
+                    }
+                }
+                else {
+                    const newSlab = await index_1.prisma.slab.create({
+                        data: {
+                            projectId: String(id),
+                            name: prod.name,
+                            size: sizeFormatted,
+                            cost: 0,
+                            requiredStages: ['Production', 'Polishing', 'Packing', 'Dispatch']
+                        }
+                    });
+                    await index_1.prisma.piece.create({
+                        data: {
+                            slabId: newSlab.id,
+                            pieceNumber: 1,
+                            productName: `${prod.name} 1.1 (Full Slab)`,
+                            size: sizeFormatted,
+                            stage: 'Production',
+                            status: 'pending'
+                        }
+                    });
+                }
+            }
+            // Update totalPieces on project
+            if (!updateData.totalPieces && quotationProducts.length > 0) {
+                await index_1.prisma.project.update({
+                    where: { id: String(id) },
+                    data: { totalPieces: quotationProducts.length }
+                });
+            }
+            fastCache_1.fastCache.invalidate('slabs_project_');
+            fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        }
         // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
         const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
         if (updateData.status && activeStatuses.includes(updateData.status) && updated.slabs.length === 0 && updated.quotations.length > 0) {
