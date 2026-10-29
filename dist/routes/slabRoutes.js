@@ -899,6 +899,26 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: String(id) },
             data: updateData
         });
+        // If size or name changed and there's 1 piece (full slab), sync piece specifications
+        try {
+            const pieceCount = await index_1.prisma.piece.count({ where: { slabId: String(id) } });
+            if (pieceCount === 1) {
+                const pieceUpdate = {};
+                if (updateData.size)
+                    pieceUpdate.size = updateData.size;
+                if (updateData.name)
+                    pieceUpdate.productName = `${updateData.name} 1.1 (Full Slab)`;
+                if (Object.keys(pieceUpdate).length > 0) {
+                    await index_1.prisma.piece.updateMany({
+                        where: { slabId: String(id) },
+                        data: pieceUpdate
+                    });
+                }
+            }
+        }
+        catch (e) {
+            console.error('Error syncing piece with updated slab:', e);
+        }
         // Invalidate caches
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('slabs_project_');
@@ -969,9 +989,23 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
 router.put('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { vendorName, vendorId, size, status, productName, stage } = req.body;
+        const pieceData = {};
+        if (vendorName !== undefined)
+            pieceData.vendorName = vendorName;
+        if (vendorId !== undefined) {
+            pieceData.vendorId = (vendorId && typeof vendorId === 'string' && vendorId.length === 24) ? vendorId : null;
+        }
+        if (size !== undefined)
+            pieceData.size = size;
+        if (status !== undefined)
+            pieceData.status = status;
+        if (productName !== undefined)
+            pieceData.productName = productName;
+        if (stage !== undefined)
+            pieceData.stage = stage;
         const updatedPiece = await index_1.prisma.piece.update({
             where: { id: String(req.params.id) },
-            data: { vendorName, vendorId, size, status, productName, stage }
+            data: pieceData
         });
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('all_projects');

@@ -70,10 +70,10 @@ router.get('/', authenticate, async (req, res) => {
           const pId = p._id.toString();
           const assignedName = p.assignedToId ? userMap.get(p.assignedToId) : null;
           const firstQuote = quoteMap.get(pId);
-          let calculatedTotalPieces = p.totalPieces || 0;
+          let calculatedTotalPieces = Number(p.totalPieces) || 0;
           let products = firstQuote?.products || [];
 
-          if (Array.isArray(products) && products.length > 0) {
+          if (calculatedTotalPieces <= 0 && Array.isArray(products) && products.length > 0) {
             const sum = products.reduce((acc: number, curr: any) => acc + (Number(curr.qty) || 0), 0);
             if (sum > 0) calculatedTotalPieces = sum;
           }
@@ -143,8 +143,8 @@ router.get('/', authenticate, async (req, res) => {
       });
 
       enrichedProjects = projects.map(p => {
-        let calculatedTotalPieces = p.totalPieces || 0;
-        if (p.quotations && p.quotations.length > 0) {
+        let calculatedTotalPieces = Number(p.totalPieces) || 0;
+        if (calculatedTotalPieces <= 0 && p.quotations && p.quotations.length > 0) {
           const firstQuote = p.quotations[0];
           if (firstQuote && firstQuote.products) {
             const products = firstQuote.products as any[];
@@ -419,9 +419,30 @@ router.patch('/:id', authenticate, async (req, res) => {
       }
     }
 
-    if (updateData.startDate) updateData.startDate = new Date(updateData.startDate);
-    if (updateData.deadline) updateData.deadline = new Date(updateData.deadline);
-    if (updateData.deliveryDate) updateData.deliveryDate = new Date(updateData.deliveryDate);
+    if (updateData.startDate !== undefined) {
+      if (!updateData.startDate) {
+        updateData.startDate = null;
+      } else {
+        const d = new Date(updateData.startDate);
+        updateData.startDate = isNaN(d.getTime()) ? null : d;
+      }
+    }
+    if (updateData.deadline !== undefined) {
+      if (!updateData.deadline) {
+        updateData.deadline = null;
+      } else {
+        const d = new Date(updateData.deadline);
+        updateData.deadline = isNaN(d.getTime()) ? null : d;
+      }
+    }
+    if (updateData.deliveryDate !== undefined) {
+      if (!updateData.deliveryDate) {
+        updateData.deliveryDate = null;
+      } else {
+        const d = new Date(updateData.deliveryDate);
+        updateData.deliveryDate = isNaN(d.getTime()) ? null : d;
+      }
+    }
     if (updateData.totalPieces !== undefined) updateData.totalPieces = parseInt(updateData.totalPieces) || 0;
     if (updateData.completedPieces !== undefined) updateData.completedPieces = parseInt(updateData.completedPieces) || 0;
 
