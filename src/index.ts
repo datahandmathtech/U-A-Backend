@@ -87,6 +87,7 @@ import slabRoutes from './routes/slabRoutes';
 import vendorRoutes from './routes/vendorRoutes';
 import wasteRoutes from './routes/wasteRoutes';
 import packingRoutes from './routes/packingRoutes';
+import productChatRoutes from './routes/productChatRoutes';
 
 // TCP/TLS Test route for Hostinger Support
 app.get('/api/test-tcp', (req, res) => {
@@ -170,6 +171,7 @@ const mountRoutes = (prefix = '') => {
   app.use(`${prefix}/vendors`, vendorRoutes);
   app.use(`${prefix}/waste`, wasteRoutes);
   app.use([`${prefix}/packing-items`, `${prefix}/packing_items`], packingRoutes);
+  app.use([`${prefix}/product-chat`, `${prefix}/product_chat`], productChatRoutes);
 };
 
 mountRoutes('/api');

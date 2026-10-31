@@ -401,6 +401,32 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         { slabId: { $in: slabObjIds } }
                     ]
                 }).sort({ pieceNumber: 1 }).toArray();
+                const pieceIds = rawPieces.map((p) => p._id.toString());
+                const pieceObjIds = rawPieces.map((p) => p._id);
+                const rawPieceLogs = await db.collection('PieceLog').find({
+                    $or: [
+                        { pieceId: { $in: pieceIds } },
+                        { pieceId: { $in: pieceObjIds } }
+                    ]
+                }).sort({ createdAt: -1 }).toArray();
+                const pieceLogMap = new Map();
+                rawPieceLogs.forEach((l) => {
+                    const pk = l.pieceId?.toString();
+                    if (!pieceLogMap.has(pk))
+                        pieceLogMap.set(pk, []);
+                    pieceLogMap.get(pk).push({
+                        id: l._id.toString(),
+                        stage: l.stage,
+                        status: l.status,
+                        machineId: l.machineId?.toString() || null,
+                        driverName: l.driverName || null,
+                        startPhotoUrl: l.startPhotoUrl || null,
+                        endPhotoUrl: l.endPhotoUrl || null,
+                        remarks: l.remarks || null,
+                        endTime: l.endTime || null,
+                        createdAt: l.createdAt
+                    });
+                });
                 const sourceMatIds = rawPieces.map((p) => p.sourceMaterialId).filter(Boolean);
                 const sourceMatObjIds = sourceMatIds
                     .filter((id) => mongoose.Types.ObjectId.isValid(id?.toString()))
@@ -470,7 +496,7 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         sourceMaterialId: smId || null,
                         vendorName: p.vendorName || null,
                         sourceMaterial: smId ? (projMatMap.get(smId) || null) : null,
-                        logs: p.logs || []
+                        logs: pieceLogMap.get(p._id.toString()) || []
                     };
                     const sKey = p.slabId?.toString();
                     if (!pieceMap.has(sKey))

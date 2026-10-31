@@ -1438,5 +1438,401 @@ router.delete('/:id', authenticate, async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
+// Quick Direct Actions: Quick Complete Piece, Revert, Edit Log
+// -------------------------------------------------------------
+
+// Quick Complete Piece (+ Action)
+router.post('/quick-complete-piece', authenticate, async (req: any, res: any) => {
+  try {
+    const { slabId, pieceId, machineId, driverName, photoUrl, stage = 'Production', remarks } = req.body;
+    if (!slabId) {
+      return res.status(400).json({ message: 'slabId is required' });
+    }
+
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      include: { pieces: { orderBy: { pieceNumber: 'asc' } }, project: true }
+    });
+
+    if (!slab) {
+      return res.status(404).json({ message: 'Slab not found' });
+    }
+
+    const normalizedStage = String(stage || 'Production').replace(' Work', '').trim();
+
+    // Determine target piece
+    let piece: any = null;
+    if (pieceId === 'new') {
+      const currentMax = (slab.pieces || []).reduce((max: number, p: any) => Math.max(max, p.pieceNumber || 0), 0);
+      piece = await prisma.piece.create({
+        data: {
+          slabId: slab.id,
+          pieceNumber: currentMax + 1,
+          productName: `${slab.name} Piece ${currentMax + 1}`,
+          status: 'completed',
+          stage: normalizedStage
+        }
+      });
+    } else if (pieceId) {
+      piece = slab.pieces.find((p: any) => p.id === pieceId);
+    } else {
+      // Find piece where this stage is not yet completed
+      piece = slab.pieces.find((p: any) => p.status !== 'completed' && p.status !== 'approved');
+      if (!piece && slab.pieces.length === 0) {
+        piece = await prisma.piece.create({
+          data: {
+            slabId: slab.id,
+            pieceNumber: 1,
+            productName: `${slab.name} Piece 1`,
+            status: 'completed',
+            stage: normalizedStage
+          }
+        });
+      } else if (!piece) {
+        piece = slab.pieces[0];
+      }
+    }
+
+    if (!piece) {
+      return res.status(400).json({ message: 'No piece available to complete' });
+    }
+
+    // 1. Update piece status to completed and advance stage
+    const updatedPiece = await prisma.piece.update({
+      where: { id: piece.id },
+      data: {
+        status: 'completed',
+        stage: normalizedStage
+      }
+    });
+
+    // 2. Create PieceLog
+    const pieceLog = await prisma.pieceLog.create({
+      data: {
+        pieceId: piece.id,
+        stage: normalizedStage,
+        status: 'approved',
+        machineId: machineId ? String(machineId) : undefined,
+        driverName: driverName ? String(driverName) : undefined,
+        operatorId: req.user?.id ? String(req.user.id) : undefined,
+        startPhotoUrl: photoUrl || undefined,
+        endPhotoUrl: photoUrl || undefined,
+        endTime: new Date(),
+        remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
+      }
+    });
+
+    // 3. Create ProductionLog for traceability & In/Out Ledger
+    try {
+      await prisma.productionLog.create({
+        data: {
+          projectId: slab.projectId,
+          slabId: slab.id,
+          productId: slab.id,
+          productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+          pieceIds: [piece.id],
+          quantityProduced: 1,
+          stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
+          transactionType: 'IN',
+          approvalStatus: 'approved',
+          machineId: machineId ? String(machineId) : undefined,
+          workerId: req.user?.id ? String(req.user.id) : undefined,
+          remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+        }
+      });
+    } catch (logErr) {
+      console.warn('ProductionLog creation warning:', logErr);
+    }
+
+    fastCache.invalidate('prod_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('project_hierarchy_');
+
+    res.json({
+      success: true,
+      message: `Piece ${piece.pieceNumber} marked as completed for ${normalizedStage}`,
+      piece: updatedPiece,
+      log: pieceLog
+    });
+  } catch (error: any) {
+    console.error('Quick complete piece error:', error);
+    res.status(500).json({ message: error.message || 'Server error completing piece' });
+  }
+});
+
+// Quick Revert Piece (- Action)
+router.post('/quick-revert-piece', authenticate, async (req: any, res: any) => {
+  try {
+    const { slabId, pieceId, stage, revertAll } = req.body;
+    if (!slabId) {
+      return res.status(400).json({ message: 'slabId is required' });
+    }
+
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      include: { pieces: { orderBy: { pieceNumber: 'asc' } } }
+    });
+
+    if (!slab || !slab.pieces || slab.pieces.length === 0) {
+      return res.status(404).json({ message: 'Slab or pieces not found' });
+    }
+
+    let piece: any = null;
+    if (pieceId) {
+      piece = slab.pieces.find((p: any) => p.id === pieceId);
+    } else {
+      // Find the last completed or in-progress piece
+      piece = slab.pieces.slice().reverse().find((p: any) => p.status === 'completed' || p.status === 'approved' || p.status === 'in_progress') || slab.pieces[slab.pieces.length - 1];
+    }
+
+    if (!piece) {
+      return res.status(400).json({ message: 'No piece found to revert' });
+    }
+
+    if (revertAll) {
+      // Delete all PieceLogs for this piece
+      await prisma.pieceLog.deleteMany({ where: { pieceId: piece.id } });
+
+      // Delete ProductionLogs containing this piece
+      try {
+        await prisma.productionLog.deleteMany({
+          where: {
+            slabId: slab.id,
+            pieceIds: { has: piece.id }
+          }
+        });
+      } catch (e) {
+        console.warn('ProductionLog revert delete warning:', e);
+      }
+
+      const updatedPiece = await prisma.piece.update({
+        where: { id: piece.id },
+        data: {
+          status: 'pending',
+          stage: slab.requiredStages?.[0] || 'Production'
+        }
+      });
+
+      fastCache.invalidate('prod_');
+      fastCache.invalidate('all_projects');
+      fastCache.invalidate('slabs_project_');
+      fastCache.invalidate('project_hierarchy_v2');
+
+      return res.json({
+        success: true,
+        message: `Piece #${piece.pieceNumber} completely reverted to pending!`,
+        piece: updatedPiece
+      });
+    }
+
+    // Single stage or latest stage revert
+    let logToDelete: any = null;
+    if (stage) {
+      const norm = stage.split(' - ')[0].replace(' Work', '').trim();
+      logToDelete = await prisma.pieceLog.findFirst({
+        where: {
+          pieceId: piece.id,
+          stage: { contains: norm, mode: 'insensitive' }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+    }
+    if (!logToDelete) {
+      logToDelete = await prisma.pieceLog.findFirst({
+        where: { pieceId: piece.id },
+        orderBy: { createdAt: 'desc' }
+      });
+    }
+
+    if (logToDelete) {
+      await prisma.pieceLog.delete({ where: { id: logToDelete.id } });
+
+      // Delete matching ProductionLog for this piece & stage
+      try {
+        const norm = (logToDelete.stage || '').split(' - ')[0].replace(' Work', '').trim();
+        const prodLog = await prisma.productionLog.findFirst({
+          where: {
+            slabId: slab.id,
+            pieceIds: { has: piece.id },
+            stage: { contains: norm, mode: 'insensitive' }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (prodLog) {
+          await prisma.productionLog.delete({ where: { id: prodLog.id } });
+        }
+      } catch (plErr) {
+        console.warn('ProductionLog delete warning:', plErr);
+      }
+    }
+
+    // Check remaining PieceLogs for this piece
+    const remainingLogs = await prisma.pieceLog.findMany({
+      where: { pieceId: piece.id },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    let updatedStage = slab.requiredStages?.[0] || 'Production';
+    let updatedStatus = 'pending';
+
+    if (remainingLogs.length > 0 && remainingLogs[0]) {
+      updatedStage = remainingLogs[0].stage;
+      updatedStatus = 'completed';
+    }
+
+    const updatedPiece = await prisma.piece.update({
+      where: { id: piece.id },
+      data: {
+        stage: updatedStage,
+        status: updatedStatus
+      }
+    });
+
+    fastCache.invalidate('prod_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('project_hierarchy_v2');
+
+    res.json({
+      success: true,
+      message: `Piece #${piece.pieceNumber} reverted successfully!`,
+      piece: updatedPiece
+    });
+  } catch (error: any) {
+    console.error('Quick revert piece error:', error);
+    res.status(500).json({ message: error.message || 'Server error reverting piece' });
+  }
+});
+
+// Quick Edit Piece Log (Edit Action)
+router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) => {
+  try {
+    const { slabId, pieceId, machineId, driverName, photoUrl, remarks } = req.body;
+    if (!slabId) {
+      return res.status(400).json({ message: 'slabId is required' });
+    }
+
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      include: { pieces: { orderBy: { pieceNumber: 'desc' } } }
+    });
+
+    if (!slab) {
+      return res.status(404).json({ message: 'Slab not found' });
+    }
+
+    let piece: any = null;
+    if (pieceId) {
+      piece = slab.pieces.find((p: any) => p.id === pieceId);
+    } else {
+      piece = slab.pieces.find((p: any) => p.status === 'completed' || p.status === 'approved') || slab.pieces[0];
+    }
+
+    if (!piece) {
+      return res.status(400).json({ message: 'Piece not found' });
+    }
+
+    // Find latest log for this piece
+    let pieceLog = await prisma.pieceLog.findFirst({
+      where: { pieceId: piece.id },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (pieceLog) {
+      pieceLog = await prisma.pieceLog.update({
+        where: { id: pieceLog.id },
+        data: {
+          machineId: machineId !== undefined ? (machineId ? String(machineId) : null) : undefined,
+          driverName: driverName !== undefined ? driverName : undefined,
+          endPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
+          startPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
+          remarks: remarks !== undefined ? remarks : undefined
+        }
+      });
+    }
+
+    // Also update corresponding ProductionLog if exists
+    try {
+      const prodLog = await prisma.productionLog.findFirst({
+        where: { slabId: slab.id, pieceIds: { has: piece.id } },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (prodLog) {
+        await prisma.productionLog.update({
+          where: { id: prodLog.id },
+          data: {
+            machineId: machineId !== undefined ? (machineId ? String(machineId) : null) : undefined,
+            remarks: remarks || (driverName ? `Driver: ${driverName}` : undefined)
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('ProductionLog update warning:', err);
+    }
+
+    fastCache.invalidate('prod_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('project_hierarchy_v2');
+
+    res.json({
+      success: true,
+      message: 'Piece details updated successfully',
+      piece,
+      log: pieceLog
+    });
+  } catch (error: any) {
+    console.error('Quick edit piece error:', error);
+    res.status(500).json({ message: error.message || 'Server error editing piece log' });
+  }
+});
+
+// GET Quick Piece Details (to pre-fill Edit Dialog)
+router.get('/quick-piece-details/:slabId', authenticate, async (req: any, res: any) => {
+  try {
+    const { slabId } = req.params;
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      include: {
+        pieces: {
+          orderBy: { pieceNumber: 'desc' },
+          include: {
+            logs: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              include: { machine: { select: { id: true, name: true } } }
+            }
+          }
+        }
+      }
+    });
+
+    if (!slab) {
+      return res.status(404).json({ message: 'Slab not found' });
+    }
+
+    // Find the latest completed piece (or the first piece)
+    const completedPiece = slab.pieces.find((p: any) => p.status === 'completed' || p.status === 'approved') || slab.pieces[0];
+    const latestLog = completedPiece?.logs?.[0] || null;
+
+    res.json({
+      slabId: slab.id,
+      slabName: slab.name,
+      piece: completedPiece,
+      latestLog,
+      machineId: latestLog?.machineId || null,
+      machineName: latestLog?.machine?.name || '',
+      driverName: latestLog?.driverName || '',
+      photoUrl: latestLog?.endPhotoUrl || latestLog?.startPhotoUrl || '',
+      remarks: latestLog?.remarks || ''
+    });
+  } catch (error: any) {
+    console.error('Error fetching quick piece details:', error);
+    res.status(500).json({ message: error.message || 'Server error fetching piece details' });
+  }
+});
+
 export default router;
 

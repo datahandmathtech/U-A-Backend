@@ -87,6 +87,7 @@ model Project {
   materials      ProjectMaterial[]
   projectClosure ProjectClosure?
   slabs          Slab[]
+  productMessages ProductMessage[]
 
   @@index([status])
   @@index([createdAt])
@@ -521,6 +522,7 @@ model Slab {
   updatedAt      DateTime   @updatedAt
 
   pieces Piece[]
+  messages ProductMessage[]
 
   @@index([projectId])
   @@index([status])
@@ -567,6 +569,7 @@ model PieceLog {
   vendorId      String?   @db.ObjectId
   vendor        Vendor?   @relation(fields: [vendorId], references: [id])
   vehicleNumber String?
+  driverName    String?
   startPhotoUrl String?
   endPhotoUrl     String?
   requiresMachine Boolean   @default(true)
@@ -619,4 +622,26 @@ model PackingItem {
   pcs         Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model ProductMessage {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  slabId        String    @db.ObjectId
+  slab          Slab      @relation(fields: [slabId], references: [id], onDelete: Cascade)
+  projectId     String    @db.ObjectId
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  senderId      String?   @db.ObjectId
+  senderName    String
+  senderRole    String    @default("employee")
+  message       String
+  attachments   String[]  @default([])
+  isReadByAdmin Boolean   @default(false)
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([slabId])
+  @@index([projectId])
+  @@index([isReadByAdmin])
+  @@index([createdAt])
 }
