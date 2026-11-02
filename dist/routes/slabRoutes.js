@@ -981,6 +981,40 @@ router.patch('/bulk-stages', authMiddleware_1.authenticate, async (req, res) => 
         res.status(500).json({ message: 'Server error bulk updating slab stages', error: error?.message || error });
     }
 });
+// Bulk delete multiple slabs and their pieces
+router.post('/bulk-delete', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { ids } = req.body;
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ message: 'No slab IDs provided for deletion' });
+        }
+        const slabIds = ids.map(id => String(id));
+        // Find all pieces under these slabs
+        const pieces = await index_1.prisma.piece.findMany({ where: { slabId: { in: slabIds } } });
+        const pieceIds = pieces.map(p => p.id);
+        if (pieceIds.length > 0) {
+            await index_1.prisma.pieceLog.deleteMany({
+                where: { pieceId: { in: pieceIds } }
+            }).catch(e => console.error(e));
+        }
+        await index_1.prisma.piece.deleteMany({
+            where: { slabId: { in: slabIds } }
+        }).catch(e => console.error(e));
+        await index_1.prisma.slab.deleteMany({
+            where: { id: { in: slabIds } }
+        }).catch(e => console.error(e));
+        fastCache_1.fastCache.invalidate('slabs_project_');
+        fastCache_1.fastCache.invalidate('all_projects');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
+        fastCache_1.fastCache.invalidate('all_names_v2');
+        res.json({ message: `Successfully deleted ${slabIds.length} slabs`, count: slabIds.length });
+    }
+    catch (error) {
+        console.error('Error in bulk-delete slabs:', error);
+        res.status(500).json({ message: 'Server error bulk deleting slabs', error: error?.message || error });
+    }
+});
 // Delete a slab
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
