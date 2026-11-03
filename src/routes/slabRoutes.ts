@@ -602,7 +602,13 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
               select: {
                 id: true,
                 stage: true,
-                status: true
+                status: true,
+                machineId: true,
+                driverName: true,
+                startPhotoUrl: true,
+                endPhotoUrl: true,
+                remarks: true,
+                createdAt: true
               }
             }
           },

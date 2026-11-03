@@ -1448,6 +1448,7 @@ router.post('/quick-complete-piece', authMiddleware_1.authenticate, async (req, 
                     stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
                     transactionType: 'IN',
                     approvalStatus: 'approved',
+                    startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
                     machineId: machineId ? String(machineId) : undefined,
                     workerId: req.user?.id ? String(req.user.id) : undefined,
                     remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
