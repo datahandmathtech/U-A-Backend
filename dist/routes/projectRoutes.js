@@ -560,6 +560,7 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 });
             }
             fastCache_1.fastCache.invalidate('slabs_project_');
+            fastCache_1.fastCache.invalidate('all_projects');
             fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         }
         // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation

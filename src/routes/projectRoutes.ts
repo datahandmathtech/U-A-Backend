@@ -590,6 +590,7 @@ router.patch('/:id', authenticate, async (req, res) => {
       }
 
       fastCache.invalidate('slabs_project_');
+      fastCache.invalidate('all_projects');
       fastCache.invalidate('project_hierarchy_v2');
     }
     
