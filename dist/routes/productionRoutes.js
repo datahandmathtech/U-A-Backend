@@ -1338,11 +1338,76 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const logToDelete = await index_1.prisma.productionLog.findUnique({ where: { id: req.params.id } });
+        if (!logToDelete) {
+            return res.status(404).json({ message: 'Log not found' });
+        }
         await index_1.prisma.productionLog.delete({
             where: { id: req.params.id }
         });
         if (logToDelete?.transactionType === 'IN' && logToDelete.parentLogId) {
             await syncParentOutLog(String(logToDelete.parentLogId));
+        }
+        const deletedStage = (logToDelete?.stage || '').replace(' Work', '').trim();
+        const deletedStagePrefix = deletedStage.split(' ')[0] || deletedStage;
+        // Determine affected pieces
+        let targetPieceIds = Array.isArray(logToDelete.pieceIds) && logToDelete.pieceIds.length > 0 ? logToDelete.pieceIds : [];
+        const slabId = logToDelete.slabId || logToDelete.productId;
+        if (targetPieceIds.length === 0 && slabId) {
+            const slabPieces = await index_1.prisma.piece.findMany({
+                where: { slabId: String(slabId) },
+                select: { id: true }
+            });
+            targetPieceIds = slabPieces.map(p => p.id);
+        }
+        if (targetPieceIds.length > 0) {
+            // 1. Delete piece logs for this stage
+            await index_1.prisma.pieceLog.deleteMany({
+                where: {
+                    pieceId: { in: targetPieceIds },
+                    stage: { startsWith: deletedStagePrefix }
+                }
+            });
+            // 2. Re-evaluate piece status for each piece
+            for (const pId of targetPieceIds) {
+                const remainingApprovedLogs = await index_1.prisma.pieceLog.findMany({
+                    where: { pieceId: pId, status: { in: ['approved', 'completed'] } },
+                    orderBy: { createdAt: 'desc' }
+                });
+                if (remainingApprovedLogs.length === 0) {
+                    await index_1.prisma.piece.update({
+                        where: { id: pId },
+                        data: {
+                            status: 'pending',
+                            stage: 'Production'
+                        }
+                    });
+                }
+                else {
+                    await index_1.prisma.piece.update({
+                        where: { id: pId },
+                        data: {
+                            status: 'pending',
+                            stage: deletedStage || remainingApprovedLogs[0]?.stage || 'Production'
+                        }
+                    });
+                }
+            }
+        }
+        // 3. Re-evaluate slab status
+        if (slabId) {
+            const allSlabPieces = await index_1.prisma.piece.findMany({
+                where: { slabId: String(slabId) },
+                select: { status: true }
+            });
+            if (allSlabPieces.length > 0) {
+                const allCompleted = allSlabPieces.every(p => p.status === 'completed' || p.status === 'approved');
+                const allPending = allSlabPieces.every(p => p.status === 'pending' || p.status === 'not_started');
+                const newSlabStatus = allCompleted ? 'completed' : (allPending ? 'not_started' : 'in_production');
+                await index_1.prisma.slab.update({
+                    where: { id: String(slabId) },
+                    data: { status: newSlabStatus }
+                });
+            }
         }
         fastCache_1.fastCache.invalidate('prod_');
         fastCache_1.fastCache.invalidate('all_projects');
@@ -1350,9 +1415,10 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         fastCache_1.fastCache.invalidate('vendors_stats');
         fastCache_1.fastCache.invalidate('vendor_ledger_');
-        res.json({ message: 'Material log deleted successfully' });
+        res.json({ message: 'Material log deleted and piece progress reverted successfully' });
     }
     catch (error) {
+        console.error('Error deleting material log:', error);
         res.status(500).json({ message: 'Server error deleting material log' });
     }
 });

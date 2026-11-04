@@ -1420,20 +1420,97 @@ router.put('/:id', authenticate, async (req, res) => {
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     const logToDelete = await prisma.productionLog.findUnique({ where: { id: req.params.id as string } });
+    if (!logToDelete) {
+      return res.status(404).json({ message: 'Log not found' });
+    }
+
     await prisma.productionLog.delete({
       where: { id: req.params.id as string }
     });
+
     if (logToDelete?.transactionType === 'IN' && logToDelete.parentLogId) {
       await syncParentOutLog(String(logToDelete.parentLogId));
     }
+
+    const deletedStage = (logToDelete?.stage || '').replace(' Work', '').trim();
+    const deletedStagePrefix = deletedStage.split(' ')[0] || deletedStage;
+
+    // Determine affected pieces
+    let targetPieceIds: string[] = Array.isArray(logToDelete.pieceIds) && logToDelete.pieceIds.length > 0 ? logToDelete.pieceIds : [];
+    const slabId = logToDelete.slabId || logToDelete.productId;
+
+    if (targetPieceIds.length === 0 && slabId) {
+      const slabPieces = await prisma.piece.findMany({
+        where: { slabId: String(slabId) },
+        select: { id: true }
+      });
+      targetPieceIds = slabPieces.map(p => p.id);
+    }
+
+    if (targetPieceIds.length > 0) {
+      // 1. Delete piece logs for this stage
+      await prisma.pieceLog.deleteMany({
+        where: {
+          pieceId: { in: targetPieceIds },
+          stage: { startsWith: deletedStagePrefix }
+        }
+      });
+
+      // 2. Re-evaluate piece status for each piece
+      for (const pId of targetPieceIds) {
+        const remainingApprovedLogs = await prisma.pieceLog.findMany({
+          where: { pieceId: pId, status: { in: ['approved', 'completed'] } },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        if (remainingApprovedLogs.length === 0) {
+          await prisma.piece.update({
+            where: { id: pId },
+            data: {
+              status: 'pending',
+              stage: 'Production'
+            }
+          });
+        } else {
+          await prisma.piece.update({
+            where: { id: pId },
+            data: {
+              status: 'pending',
+              stage: deletedStage || remainingApprovedLogs[0]?.stage || 'Production'
+            }
+          });
+        }
+      }
+    }
+
+    // 3. Re-evaluate slab status
+    if (slabId) {
+      const allSlabPieces = await prisma.piece.findMany({
+        where: { slabId: String(slabId) },
+        select: { status: true }
+      });
+
+      if (allSlabPieces.length > 0) {
+        const allCompleted = allSlabPieces.every(p => p.status === 'completed' || p.status === 'approved');
+        const allPending = allSlabPieces.every(p => p.status === 'pending' || p.status === 'not_started');
+        const newSlabStatus = allCompleted ? 'completed' : (allPending ? 'not_started' : 'in_production');
+
+        await prisma.slab.update({
+          where: { id: String(slabId) },
+          data: { status: newSlabStatus }
+        });
+      }
+    }
+
     fastCache.invalidate('prod_');
     fastCache.invalidate('all_projects');
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('project_hierarchy_v2');
     fastCache.invalidate('vendors_stats');
     fastCache.invalidate('vendor_ledger_');
-    res.json({ message: 'Material log deleted successfully' });
+    res.json({ message: 'Material log deleted and piece progress reverted successfully' });
   } catch (error) {
+    console.error('Error deleting material log:', error);
     res.status(500).json({ message: 'Server error deleting material log' });
   }
 });
