@@ -1701,7 +1701,16 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
       return res.status(400).json({ message: 'No piece available to complete' });
     }
 
-    const targetStatus = (req.body.status === 'pending' || req.body.status === 'not_started') ? 'pending' : 'completed';
+    const targetStatus = (req.body.status === 'pending' || req.body.status === 'not_started') 
+      ? 'pending' 
+      : (req.body.status === 'in_progress' || req.body.status === 'active')
+      ? 'in_progress'
+      : 'completed';
+
+    const now = new Date();
+    const parsedStartTime = req.body.startTime ? new Date(req.body.startTime) : now;
+    const parsedEndTime = req.body.endTime ? new Date(req.body.endTime) : now;
+
     const pieceUpdateData: any = {
       status: targetStatus,
       stage: normalizedStage
@@ -1715,8 +1724,150 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
       data: pieceUpdateData
     });
 
-    let pieceLog = null;
-    if (targetStatus === 'completed') {
+    let pieceLog: any = null;
+    let machineLogRecord: any = null;
+
+    if (targetStatus === 'in_progress') {
+      // Machine is turned ON (In Progress)
+      if (machineId) {
+        const existingMLog = await prisma.machineLog.findFirst({
+          where: {
+            productId: piece.id,
+            status: 'active'
+          }
+        });
+
+        if (existingMLog) {
+          machineLogRecord = await prisma.machineLog.update({
+            where: { id: existingMLog.id },
+            data: {
+              machineId: String(machineId),
+              startTime: parsedStartTime,
+              remarks: remarks || `Machine ON in Active Work Orders`,
+              operatorId: req.user?.id ? String(req.user.id) : existingMLog.operatorId
+            }
+          });
+        } else {
+          machineLogRecord = await prisma.machineLog.create({
+            data: {
+              machineId: String(machineId),
+              projectId: slab.projectId,
+              productId: piece.id,
+              productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+              startTime: parsedStartTime,
+              status: 'active',
+              approvalStatus: 'in_progress',
+              operatorId: req.user?.id ? String(req.user.id) : undefined,
+              machinePhotoUrl: photoUrl || undefined,
+              unitPhotoUrl: photoUrl || undefined,
+              remarks: remarks || `Machine ON in Active Work Orders`
+            }
+          });
+        }
+
+        // Set machine status to running
+        await prisma.machine.update({
+          where: { id: String(machineId) },
+          data: { status: 'running' }
+        }).catch(() => {});
+      }
+
+      // Create PieceLog for In Progress
+      pieceLog = await prisma.pieceLog.create({
+        data: {
+          pieceId: piece.id,
+          stage: normalizedStage,
+          status: 'in_progress',
+          machineId: machineId ? String(machineId) : undefined,
+          operatorId: req.user?.id ? String(req.user.id) : undefined,
+          startPhotoUrl: photoUrl || undefined,
+          startTime: parsedStartTime,
+          remarks: remarks || `Machine ON in Active Work Orders`
+        }
+      });
+
+      // Create linked production log for tracking
+      try {
+        await prisma.productionLog.create({
+          data: {
+            projectId: slab.projectId,
+            slabId: slab.id,
+            productId: slab.id,
+            productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+            pieceIds: [piece.id],
+            quantityProduced: 0,
+            stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
+            transactionType: 'IN',
+            approvalStatus: 'pending',
+            startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
+            machineId: machineId ? String(machineId) : undefined,
+            workerId: req.user?.id ? String(req.user.id) : undefined,
+            parentLogId: machineLogRecord?.id,
+            remarks: remarks || `Machine ON: ${normalizedStage}`
+          }
+        });
+      } catch (logErr) {
+        console.warn('ProductionLog in_progress warning:', logErr);
+      }
+    } else if (targetStatus === 'completed') {
+      // Machine is turned OFF (Completed)
+      if (machineId) {
+        const existingMLog = await prisma.machineLog.findFirst({
+          where: {
+            productId: piece.id,
+            status: 'active'
+          }
+        });
+
+        const effectiveStartTime = existingMLog?.startTime || parsedStartTime;
+        const durationHours = Math.max(0.1, (parsedEndTime.getTime() - new Date(effectiveStartTime).getTime()) / (1000 * 60 * 60));
+
+        if (existingMLog) {
+          machineLogRecord = await prisma.machineLog.update({
+            where: { id: existingMLog.id },
+            data: {
+              endTime: parsedEndTime,
+              status: 'completed',
+              approvalStatus: 'approved',
+              quantityProduced: 1,
+              endUnitPhotoUrl: photoUrl || undefined,
+              endMachinePhotoUrl: photoUrl || undefined,
+              remarks: remarks ? `${existingMLog.remarks || ''}\nOut: ${remarks}`.trim() : (existingMLog.remarks || 'Machine OFF in Active Work Orders')
+            }
+          });
+        } else {
+          // Direct Complete - Create completed MachineLog so LogBook gets entry with On Time/Date and End Time/Date
+          machineLogRecord = await prisma.machineLog.create({
+            data: {
+              machineId: String(machineId),
+              projectId: slab.projectId,
+              productId: piece.id,
+              productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+              startTime: parsedStartTime,
+              endTime: parsedEndTime,
+              status: 'completed',
+              approvalStatus: 'approved',
+              quantityProduced: 1,
+              operatorId: req.user?.id ? String(req.user.id) : undefined,
+              machinePhotoUrl: photoUrl || undefined,
+              unitPhotoUrl: photoUrl || undefined,
+              endMachinePhotoUrl: photoUrl || undefined,
+              endUnitPhotoUrl: photoUrl || undefined,
+              remarks: remarks || `Machine OFF / Completed in Active Work Orders`
+            }
+          });
+        }
+
+        // Update machine total hours and set to idle
+        await prisma.machine.update({
+          where: { id: String(machineId) },
+          data: { 
+            status: 'idle',
+            totalRunHours: { increment: durationHours }
+          }
+        }).catch(() => {});
+      }
+
       // 2. Create PieceLog
       pieceLog = await prisma.pieceLog.create({
         data: {
@@ -1728,7 +1879,8 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
           operatorId: req.user?.id ? String(req.user.id) : undefined,
           startPhotoUrl: photoUrl || undefined,
           endPhotoUrl: photoUrl || undefined,
-          endTime: new Date(),
+          startTime: parsedStartTime,
+          endTime: parsedEndTime,
           remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
         }
       });
@@ -1749,6 +1901,7 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
             startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
             machineId: machineId ? String(machineId) : undefined,
             workerId: req.user?.id ? String(req.user.id) : undefined,
+            parentLogId: machineLogRecord?.id,
             remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
           }
         });
@@ -1756,7 +1909,10 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
         console.warn('ProductionLog creation warning:', logErr);
       }
     } else {
-      // If Not Started, remove previous completion logs so stage progress drops back immediately!
+      // If Not Started, remove previous completion and machine logs so stage progress drops back immediately!
+      await prisma.machineLog.deleteMany({
+        where: { productId: piece.id }
+      }).catch(() => {});
       await prisma.pieceLog.deleteMany({
         where: { pieceId: piece.id }
       }).catch(() => {});
@@ -1769,6 +1925,11 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
         }
       }).catch(() => {});
     }
+
+    // Invalidate Machine & Production caches so LogBook updates immediately!
+    fastCache.invalidate('all_machine_logs');
+    fastCache.invalidate('daily_machine_logs');
+    fastCache.invalidate('live_feed');
 
     // Optional: Update slab name / size if passed
     if (req.body.slabName || req.body.slabSize) {
