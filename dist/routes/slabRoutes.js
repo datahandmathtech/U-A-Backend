@@ -1063,16 +1063,48 @@ router.put('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
         }
         if (size !== undefined)
             pieceData.size = size;
-        if (status !== undefined)
-            pieceData.status = status;
         if (productName !== undefined)
             pieceData.productName = productName;
         if (stage !== undefined)
             pieceData.stage = stage;
+        if (status !== undefined) {
+            const targetStatus = (status === 'pending' || status === 'not_started') ? 'pending' : 'completed';
+            pieceData.status = targetStatus;
+            if (targetStatus === 'pending') {
+                // Clear completed logs so it drops to 0% / Not Started immediately!
+                await index_1.prisma.pieceLog.deleteMany({
+                    where: { pieceId: String(req.params.id) }
+                }).catch(() => { });
+                await index_1.prisma.productionLog.deleteMany({
+                    where: {
+                        OR: [
+                            { pieceIds: { has: String(req.params.id) } },
+                            { productId: String(req.params.id) }
+                        ]
+                    }
+                }).catch(() => { });
+            }
+        }
         const updatedPiece = await index_1.prisma.piece.update({
             where: { id: String(req.params.id) },
             data: pieceData
         });
+        // Sync slab status
+        if (updatedPiece.slabId) {
+            const allPieces = await index_1.prisma.piece.findMany({ where: { slabId: updatedPiece.slabId } });
+            const completedCount = allPieces.filter(p => p.status === 'completed').length;
+            let newSlabStatus = 'not_started';
+            if (completedCount === allPieces.length && allPieces.length > 0) {
+                newSlabStatus = 'completed';
+            }
+            else if (completedCount > 0) {
+                newSlabStatus = 'in_production';
+            }
+            await index_1.prisma.slab.update({
+                where: { id: updatedPiece.slabId },
+                data: { status: newSlabStatus }
+            }).catch(() => { });
+        }
         fastCache_1.fastCache.invalidate('slabs_project_');
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('project_hierarchy_v2');

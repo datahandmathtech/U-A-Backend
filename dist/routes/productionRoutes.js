@@ -1412,52 +1412,99 @@ router.post('/quick-complete-piece', authMiddleware_1.authenticate, async (req, 
         if (!piece) {
             return res.status(400).json({ message: 'No piece available to complete' });
         }
-        // 1. Update piece status to completed and advance stage
+        const targetStatus = (req.body.status === 'pending' || req.body.status === 'not_started') ? 'pending' : 'completed';
+        const pieceUpdateData = {
+            status: targetStatus,
+            stage: normalizedStage
+        };
+        if (req.body.productName)
+            pieceUpdateData.productName = req.body.productName;
+        if (req.body.size)
+            pieceUpdateData.size = req.body.size;
+        // 1. Update piece status, name, size and stage
         const updatedPiece = await index_1.prisma.piece.update({
             where: { id: piece.id },
-            data: {
-                status: 'completed',
-                stage: normalizedStage
-            }
+            data: pieceUpdateData
         });
-        // 2. Create PieceLog
-        const pieceLog = await index_1.prisma.pieceLog.create({
-            data: {
-                pieceId: piece.id,
-                stage: normalizedStage,
-                status: 'approved',
-                machineId: machineId ? String(machineId) : undefined,
-                driverName: driverName ? String(driverName) : undefined,
-                operatorId: req.user?.id ? String(req.user.id) : undefined,
-                startPhotoUrl: photoUrl || undefined,
-                endPhotoUrl: photoUrl || undefined,
-                endTime: new Date(),
-                remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
-            }
-        });
-        // 3. Create ProductionLog for traceability & In/Out Ledger
-        try {
-            await index_1.prisma.productionLog.create({
+        let pieceLog = null;
+        if (targetStatus === 'completed') {
+            // 2. Create PieceLog
+            pieceLog = await index_1.prisma.pieceLog.create({
                 data: {
-                    projectId: slab.projectId,
-                    slabId: slab.id,
-                    productId: slab.id,
-                    productName: `${slab.name} - Piece ${piece.pieceNumber}`,
-                    pieceIds: [piece.id],
-                    quantityProduced: 1,
-                    stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
-                    transactionType: 'IN',
-                    approvalStatus: 'approved',
-                    startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
+                    pieceId: piece.id,
+                    stage: normalizedStage,
+                    status: 'approved',
                     machineId: machineId ? String(machineId) : undefined,
-                    workerId: req.user?.id ? String(req.user.id) : undefined,
-                    remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+                    driverName: driverName ? String(driverName) : undefined,
+                    operatorId: req.user?.id ? String(req.user.id) : undefined,
+                    startPhotoUrl: photoUrl || undefined,
+                    endPhotoUrl: photoUrl || undefined,
+                    endTime: new Date(),
+                    remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
                 }
             });
+            // 3. Create ProductionLog for traceability & In/Out Ledger
+            try {
+                await index_1.prisma.productionLog.create({
+                    data: {
+                        projectId: slab.projectId,
+                        slabId: slab.id,
+                        productId: slab.id,
+                        productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+                        pieceIds: [piece.id],
+                        quantityProduced: 1,
+                        stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
+                        transactionType: 'IN',
+                        approvalStatus: 'approved',
+                        startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
+                        machineId: machineId ? String(machineId) : undefined,
+                        workerId: req.user?.id ? String(req.user.id) : undefined,
+                        remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+                    }
+                });
+            }
+            catch (logErr) {
+                console.warn('ProductionLog creation warning:', logErr);
+            }
         }
-        catch (logErr) {
-            console.warn('ProductionLog creation warning:', logErr);
+        else {
+            // If Not Started, remove previous completion logs so stage progress drops back immediately!
+            await index_1.prisma.pieceLog.deleteMany({
+                where: { pieceId: piece.id }
+            }).catch(() => { });
+            await index_1.prisma.productionLog.deleteMany({
+                where: {
+                    OR: [
+                        { pieceIds: { has: piece.id } },
+                        { productId: piece.id }
+                    ]
+                }
+            }).catch(() => { });
         }
+        // Optional: Update slab name / size if passed
+        if (req.body.slabName || req.body.slabSize) {
+            await index_1.prisma.slab.update({
+                where: { id: slab.id },
+                data: {
+                    ...(req.body.slabName ? { name: req.body.slabName } : {}),
+                    ...(req.body.slabSize ? { size: req.body.slabSize } : {})
+                }
+            }).catch(() => { });
+        }
+        // Sync slab status
+        const allPieces = await index_1.prisma.piece.findMany({ where: { slabId: slab.id } });
+        const completedCount = allPieces.filter(p => p.status === 'completed').length;
+        let newSlabStatus = 'not_started';
+        if (completedCount === allPieces.length && allPieces.length > 0) {
+            newSlabStatus = 'completed';
+        }
+        else if (completedCount > 0) {
+            newSlabStatus = 'in_production';
+        }
+        await index_1.prisma.slab.update({
+            where: { id: slab.id },
+            data: { status: newSlabStatus }
+        }).catch(() => { });
         fastCache_1.fastCache.invalidate('prod_');
         fastCache_1.fastCache.invalidate('all_projects');
         fastCache_1.fastCache.invalidate('slabs_project_');
@@ -1606,7 +1653,7 @@ router.post('/quick-revert-piece', authMiddleware_1.authenticate, async (req, re
 // Quick Edit Piece Log (Edit Action)
 router.patch('/quick-edit-piece-log', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { slabId, pieceId, machineId, driverName, photoUrl, remarks } = req.body;
+        const { slabId, pieceId, machineId, driverName, photoUrl, remarks, productName, size, status } = req.body;
         if (!slabId) {
             return res.status(400).json({ message: 'slabId is required' });
         }
@@ -1627,6 +1674,46 @@ router.patch('/quick-edit-piece-log', authMiddleware_1.authenticate, async (req,
         if (!piece) {
             return res.status(400).json({ message: 'Piece not found' });
         }
+        const pieceUpdateData = {};
+        if (productName !== undefined)
+            pieceUpdateData.productName = productName;
+        if (size !== undefined)
+            pieceUpdateData.size = size;
+        if (status !== undefined) {
+            const targetStatus = (status === 'pending' || status === 'not_started') ? 'pending' : 'completed';
+            pieceUpdateData.status = targetStatus;
+            if (targetStatus === 'pending') {
+                await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: piece.id } }).catch(() => { });
+                await index_1.prisma.productionLog.deleteMany({
+                    where: {
+                        OR: [
+                            { pieceIds: { has: piece.id } },
+                            { productId: piece.id }
+                        ]
+                    }
+                }).catch(() => { });
+            }
+        }
+        if (Object.keys(pieceUpdateData).length > 0) {
+            piece = await index_1.prisma.piece.update({
+                where: { id: piece.id },
+                data: pieceUpdateData
+            });
+        }
+        // Sync slab status
+        const allPieces = await index_1.prisma.piece.findMany({ where: { slabId: slab.id } });
+        const completedCount = allPieces.filter(p => p.status === 'completed').length;
+        let newSlabStatus = 'not_started';
+        if (completedCount === allPieces.length && allPieces.length > 0) {
+            newSlabStatus = 'completed';
+        }
+        else if (completedCount > 0) {
+            newSlabStatus = 'in_production';
+        }
+        await index_1.prisma.slab.update({
+            where: { id: slab.id },
+            data: { status: newSlabStatus }
+        }).catch(() => { });
         // Find latest log for this piece
         let pieceLog = await index_1.prisma.pieceLog.findFirst({
             where: { pieceId: piece.id },
