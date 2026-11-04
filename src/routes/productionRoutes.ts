@@ -2120,7 +2120,7 @@ router.post('/quick-revert-piece', authenticate, async (req: any, res: any) => {
 // Quick Edit Piece Log (Edit Action)
 router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) => {
   try {
-    const { slabId, pieceId, machineId, driverName, photoUrl, remarks, productName, size, status } = req.body;
+    const { slabId, pieceId, machineId, driverName, photoUrl, remarks, productName, size, status, startTime, endTime } = req.body;
     if (!slabId) {
       return res.status(400).json({ message: 'slabId is required' });
     }
@@ -2199,7 +2199,9 @@ router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) =
           driverName: driverName !== undefined ? driverName : undefined,
           endPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
           startPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
-          remarks: remarks !== undefined ? remarks : undefined
+          remarks: remarks !== undefined ? remarks : undefined,
+          startTime: startTime ? new Date(startTime) : undefined,
+          endTime: endTime ? new Date(endTime) : undefined
         }
       });
     }
@@ -2221,6 +2223,53 @@ router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) =
       }
     } catch (err) {
       console.warn('ProductionLog update warning:', err);
+    }
+
+    // Update / Create MachineLog for LogBook
+    if (machineId) {
+      try {
+        const parsedStartTime = startTime ? new Date(startTime) : new Date();
+        const parsedEndTime = endTime ? new Date(endTime) : new Date();
+        const durationHours = Math.max(0.1, (parsedEndTime.getTime() - parsedStartTime.getTime()) / (1000 * 60 * 60));
+
+        const existingMLog = await prisma.machineLog.findFirst({
+          where: { productId: piece.id, machineId: String(machineId) },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (existingMLog) {
+          await prisma.machineLog.update({
+            where: { id: existingMLog.id },
+            data: {
+              startTime: parsedStartTime,
+              endTime: parsedEndTime,
+              actualRunHours: durationHours,
+              operatorName: driverName || undefined,
+              remarks: remarks || undefined
+            }
+          });
+        } else {
+          await prisma.machineLog.create({
+            data: {
+              machineId: String(machineId),
+              projectId: slab.projectId,
+              productId: piece.id,
+              productName: piece.productName || slab.name,
+              operatorName: driverName || 'Admin User',
+              startTime: parsedStartTime,
+              endTime: parsedEndTime,
+              actualRunHours: durationHours,
+              quantityProduced: 1,
+              status: 'completed',
+              approvalStatus: 'approved',
+              remarks: remarks || undefined
+            }
+          });
+        }
+        fastCache.invalidate('all_machine_logs');
+        fastCache.invalidate('daily_machine_logs');
+      } catch (mErr) {
+        console.warn('MachineLog update warning in quick-edit:', mErr);
+      }
     }
 
     fastCache.invalidate('prod_');
