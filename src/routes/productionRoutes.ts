@@ -1292,6 +1292,132 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
   }
 });
 
+// Create and save boxes for Packing Workspace
+router.post('/pack-boxes', authenticate, async (req: any, res: any) => {
+  try {
+    const { projectId, slabId, boxes } = req.body;
+    if (!Array.isArray(boxes) || boxes.length === 0) {
+      return res.status(400).json({ message: 'No boxes provided' });
+    }
+
+    const createdLogs = [];
+    for (const b of boxes) {
+      const pieceIds = Array.isArray(b.pieceIds) ? b.pieceIds.map(String) : [];
+      if (pieceIds.length === 0) continue;
+
+      // 1. Create ProductionLog for Box
+      const log = await prisma.productionLog.create({
+        data: {
+          projectId: projectId ? String(projectId) : undefined,
+          slabId: slabId ? String(slabId) : undefined,
+          productId: slabId ? String(slabId) : undefined,
+          productName: b.boxName || 'Box',
+          stage: 'Packing',
+          boxCode: b.boxName || 'Box',
+          pieceIds,
+          quantityProduced: pieceIds.length,
+          transactionType: 'IN',
+          approvalStatus: 'approved',
+          remarks: b.remarks || `${b.boxName || 'Box'} • ${pieceIds.length} Pieces`,
+          workerId: req.user?.id ? String(req.user.id) : undefined
+        }
+      });
+      createdLogs.push(log);
+
+      // 2. Create PieceLog for each piece
+      const pieceLogsData = pieceIds.map((pid: string) => ({
+        pieceId: pid,
+        stage: 'Packing',
+        status: 'approved',
+        remarks: b.boxName || 'Packed into Box',
+        operatorId: req.user?.id ? String(req.user.id) : undefined,
+        endTime: new Date()
+      }));
+      await prisma.pieceLog.createMany({ data: pieceLogsData });
+
+      // 3. Update Piece stage & status
+      await prisma.piece.updateMany({
+        where: { id: { in: pieceIds } },
+        data: {
+          status: 'completed',
+          stage: 'Packing'
+        }
+      });
+    }
+
+    // Invalidate caches
+    fastCache.invalidate('prod_');
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
+
+    res.json({ success: true, message: `Successfully packed ${boxes.length} box(es)`, logs: createdLogs });
+  } catch (error: any) {
+    console.error('Error packing boxes:', error);
+    res.status(500).json({ message: error.message || 'Server error packing boxes' });
+  }
+});
+
+// Complete Dispatch for Packed Boxes
+router.post('/dispatch-boxes', authenticate, async (req: any, res: any) => {
+  try {
+    const { projectId, slabId, boxCodes, pieceIds, vehicleNumber, driverName, dispatchDate, lrNumber, remarks } = req.body;
+    
+    const pIds = Array.isArray(pieceIds) ? pieceIds.map(String) : [];
+    const boxesStr = Array.isArray(boxCodes) ? boxCodes.join(', ') : (boxCodes || 'Boxes');
+
+    const log = await prisma.productionLog.create({
+      data: {
+        projectId: projectId ? String(projectId) : undefined,
+        slabId: slabId ? String(slabId) : undefined,
+        productId: slabId ? String(slabId) : undefined,
+        productName: `Dispatch - ${boxesStr}`,
+        stage: 'Dispatch',
+        boxCode: boxesStr,
+        vehicleNumber: vehicleNumber || undefined,
+        challanNumber: lrNumber || undefined,
+        pieceIds: pIds,
+        quantityProduced: pIds.length,
+        transactionType: 'OUT',
+        approvalStatus: 'approved',
+        remarks: remarks || `Vehicle: ${vehicleNumber || '-'}, Driver: ${driverName || '-'}${lrNumber ? `, LR: ${lrNumber}` : ''}`,
+        workerId: req.user?.id ? String(req.user.id) : undefined
+      }
+    });
+
+    if (pIds.length > 0) {
+      const pieceLogsData = pIds.map((pid: string) => ({
+        pieceId: pid,
+        stage: 'Dispatch',
+        status: 'approved',
+        driverName: driverName || undefined,
+        remarks: `Dispatched with Vehicle ${vehicleNumber || '-'}`,
+        operatorId: req.user?.id ? String(req.user.id) : undefined,
+        endTime: new Date()
+      }));
+      await prisma.pieceLog.createMany({ data: pieceLogsData });
+
+      await prisma.piece.updateMany({
+        where: { id: { in: pIds } },
+        data: {
+          status: 'completed',
+          stage: 'Dispatch'
+        }
+      });
+    }
+
+    fastCache.invalidate('prod_');
+    fastCache.invalidate('slabs_project_');
+    fastCache.invalidate('all_projects');
+    fastCache.invalidate('project_hierarchy_v2');
+
+    res.json({ success: true, message: 'Dispatch completed successfully', log });
+  } catch (error: any) {
+    console.error('Error completing dispatch:', error);
+    res.status(500).json({ message: error.message || 'Server error completing dispatch' });
+  }
+});
+
 // Fetch approved material logs for Production Management
 router.get('/approved-logs', authenticate, async (req, res) => {
   try {

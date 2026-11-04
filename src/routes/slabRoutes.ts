@@ -535,17 +535,37 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         const pieceMap = new Map();
         rawPieces.forEach((p: any) => {
           const smId = p.sourceMaterialId?.toString();
+          const pLogs = pieceLogMap.get(p._id.toString()) || [];
+          
+          let pieceStage = p.stage || 'Production';
+          let pieceStatus = p.status || 'pending';
+
+          // Auto-reconcile orphan Packing/Dispatch pieces if their log was deleted
+          const normStage = (pieceStage || '').replace(' Work', '').trim();
+          if (normStage === 'Packing' || normStage === 'Dispatch') {
+            const hasApprovedLog = pLogs.some((l: any) => {
+              const lStage = (l.stage || '').replace(' Work', '').trim();
+              return (lStage === normStage || lStage.startsWith(normStage)) && (l.status === 'approved' || l.status === 'completed');
+            });
+            if (!hasApprovedLog) {
+              pieceStatus = 'pending';
+              const hasPolishingLog = pLogs.some((l: any) => (l.stage || '').startsWith('Polishing'));
+              pieceStage = hasPolishingLog ? 'Polishing' : 'Production';
+              db.collection('Piece').updateOne({ _id: p._id }, { $set: { status: 'pending', stage: pieceStage } }).catch(() => {});
+            }
+          }
+
           const pObj = {
             id: p._id.toString(),
             pieceNumber: p.pieceNumber,
             productName: p.productName,
             size: p.size,
-            stage: p.stage,
-            status: p.status,
+            stage: pieceStage,
+            status: pieceStatus,
             sourceMaterialId: smId || null,
             vendorName: p.vendorName || null,
             sourceMaterial: smId ? (projMatMap.get(smId) || null) : null,
-            logs: pieceLogMap.get(p._id.toString()) || []
+            logs: pLogs
           };
           const sKey = p.slabId?.toString();
           if (!pieceMap.has(sKey)) pieceMap.set(sKey, []);
@@ -624,6 +644,26 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
       if (seenPrismaNames.has(norm)) return false;
       seenPrismaNames.add(norm);
       return true;
+    });
+
+    uniquePrismaSlabs.forEach((s: any) => {
+      if (Array.isArray(s.pieces)) {
+        s.pieces.forEach((p: any) => {
+          const normStage = (p.stage || '').replace(' Work', '').trim();
+          if (normStage === 'Packing' || normStage === 'Dispatch') {
+            const hasApprovedLog = Array.isArray(p.logs) && p.logs.some((l: any) => {
+              const lStage = (l.stage || '').replace(' Work', '').trim();
+              return (lStage === normStage || lStage.startsWith(normStage)) && (l.status === 'approved' || l.status === 'completed');
+            });
+            if (!hasApprovedLog) {
+              p.status = 'pending';
+              const hasPolishingLog = Array.isArray(p.logs) && p.logs.some((l: any) => (l.stage || '').startsWith('Polishing'));
+              p.stage = hasPolishingLog ? 'Polishing' : 'Production';
+              prisma.piece.update({ where: { id: p.id }, data: { status: 'pending', stage: p.stage } }).catch(() => {});
+            }
+          }
+        });
+      }
     });
 
     fastCache.set(cacheKey, uniquePrismaSlabs, 60);
