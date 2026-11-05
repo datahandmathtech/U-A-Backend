@@ -1305,20 +1305,36 @@ router.post('/pack-boxes', authenticate, async (req: any, res: any) => {
       const pieceIds = Array.isArray(b.pieceIds) ? b.pieceIds.map(String) : [];
       if (pieceIds.length === 0) continue;
 
+      // Defensive check: avoid duplicate log creation within 15 seconds for identical pieceIds
+      const recentLog = await prisma.productionLog.findFirst({
+        where: {
+          stage: 'Packing',
+          projectId: projectId ? String(projectId) : undefined,
+          createdAt: { gte: new Date(Date.now() - 15000) }
+        }
+      });
+      if (recentLog && Array.isArray(recentLog.pieceIds) && pieceIds.length === recentLog.pieceIds.length && pieceIds.every((id: string) => recentLog.pieceIds.includes(id))) {
+        console.log('Skipping duplicate pack-boxes request within 15s');
+        continue;
+      }
+
+      const boxName = b.boxName || 'Box';
+      const boxDisplayName = b.boxSize ? `${boxName} | ${b.boxSize}` : boxName;
+
       // 1. Create ProductionLog for Box
       const log = await prisma.productionLog.create({
         data: {
           projectId: projectId ? String(projectId) : undefined,
           slabId: slabId ? String(slabId) : undefined,
           productId: slabId ? String(slabId) : undefined,
-          productName: b.boxName || 'Box',
+          productName: boxDisplayName,
           stage: 'Packing',
-          boxCode: b.boxName || 'Box',
+          boxCode: boxDisplayName,
           pieceIds,
           quantityProduced: pieceIds.length,
           transactionType: 'IN',
           approvalStatus: 'approved',
-          remarks: b.remarks || `${b.boxName || 'Box'} • ${pieceIds.length} Pieces`,
+          remarks: b.remarks || `${boxDisplayName} • ${pieceIds.length} Pieces`,
           workerId: req.user?.id ? String(req.user.id) : undefined
         }
       });
@@ -1329,7 +1345,7 @@ router.post('/pack-boxes', authenticate, async (req: any, res: any) => {
         pieceId: pid,
         stage: 'Packing',
         status: 'approved',
-        remarks: b.boxName || 'Packed into Box',
+        remarks: boxDisplayName,
         operatorId: req.user?.id ? String(req.user.id) : undefined,
         endTime: new Date()
       }));
@@ -1376,12 +1392,14 @@ router.post('/dispatch-boxes', authenticate, async (req: any, res: any) => {
         boxCode: boxesStr,
         vehicleNumber: vehicleNumber || undefined,
         challanNumber: lrNumber || undefined,
+        vendorName: driverName || undefined,
         pieceIds: pIds,
         quantityProduced: pIds.length,
         transactionType: 'OUT',
         approvalStatus: 'approved',
         remarks: remarks || `Vehicle: ${vehicleNumber || '-'}, Driver: ${driverName || '-'}${lrNumber ? `, LR: ${lrNumber}` : ''}`,
-        workerId: req.user?.id ? String(req.user.id) : undefined
+        workerId: req.user?.id ? String(req.user.id) : undefined,
+        startTime: dispatchDate ? new Date(dispatchDate) : new Date()
       }
     });
 
