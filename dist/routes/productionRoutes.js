@@ -1155,6 +1155,8 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
                 const firstPiece = groupPieces[0];
                 const targetSlab = firstPiece?.slab;
                 const pieceNames = groupPieces.map(p => p.productName || `Piece ${p.pieceNumber}`).join(', ');
+                const isPackingStage = stg === 'Packing' || stg === 'Packing Work';
+                const isDispatchStage = stg === 'Dispatch' || stg === 'Dispatch Work';
                 // Update piece status and stage
                 await index_1.prisma.piece.updateMany({
                     where: { id: { in: groupPieceIds } },
@@ -1170,13 +1172,19 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
                             projectId: targetProjectId ? String(targetProjectId) : undefined,
                             slabId: targetSlab ? targetSlab.id : (sId !== 'default' ? sId : undefined),
                             productId: targetSlab?.id,
-                            productName: targetSlab ? `${targetSlab.name} - ${pieceNames}` : pieceNames,
+                            productName: isDispatchStage
+                                ? `Dispatch - Manual (${groupPieces.length} Pieces)`
+                                : (isPackingStage ? `Box - Manual` : (targetSlab ? `${targetSlab.name} - ${pieceNames}` : pieceNames)),
                             pieceIds: groupPieceIds,
                             quantityProduced: groupPieces.length,
-                            stage: stg.includes('Work') ? stg : `${stg} Work`,
-                            transactionType: 'IN',
+                            stage: isDispatchStage ? 'Dispatch' : (isPackingStage ? 'Packing' : (stg.includes('Work') ? stg : `${stg} Work`)),
+                            boxCode: isPackingStage ? 'Box - Manual | Standard' : (isDispatchStage ? 'Manual Box' : undefined),
+                            vehicleNumber: isDispatchStage ? 'Manual' : undefined,
+                            vendorName: isDispatchStage ? 'Manual' : undefined,
+                            challanNumber: isDispatchStage ? 'Manual' : undefined,
+                            transactionType: isDispatchStage ? 'OUT' : 'IN',
                             approvalStatus: 'approved',
-                            remarks: remarks || `Manual Direct Approval for ${stg}: ${groupPieces.length} pieces (${pieceNames})`,
+                            remarks: 'Manual Approval',
                             workerId: req.user?.id ? String(req.user.id) : undefined
                         }
                     });
@@ -1191,8 +1199,9 @@ router.post('/manual-approve-pieces', authMiddleware_1.authenticate, async (req,
                         pieceId: p.id,
                         stage: stg,
                         status: 'approved',
+                        driverName: isDispatchStage ? 'Manual' : undefined,
                         operatorId: req.user?.id ? String(req.user.id) : undefined,
-                        remarks: 'Manual Direct Approval',
+                        remarks: 'Manual Approval',
                         endTime: new Date()
                     }));
                     if (pieceLogsData.length > 0) {
