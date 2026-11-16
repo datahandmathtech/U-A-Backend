@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth';
 
 const router = express.Router();
 
-// GET all messages for a specific slab/product
+// GET all messages for a project (or slab)
 router.get('/:slabId', authenticate, async (req: any, res: any) => {
   try {
     const { slabId } = req.params;
@@ -12,8 +12,22 @@ router.get('/:slabId', authenticate, async (req: any, res: any) => {
       return res.status(400).json({ message: 'slabId is required' });
     }
 
+    let targetProjectId = slabId;
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      select: { projectId: true }
+    }).catch(() => null);
+    if (slab?.projectId) {
+      targetProjectId = slab.projectId;
+    }
+
     const messages = await prisma.productMessage.findMany({
-      where: { slabId },
+      where: {
+        OR: [
+          { projectId: targetProjectId },
+          { slabId: slabId }
+        ]
+      },
       orderBy: { createdAt: 'asc' }
     });
 
@@ -29,7 +43,7 @@ router.get('/:slabId', authenticate, async (req: any, res: any) => {
   }
 });
 
-// POST a new message for a specific slab/product
+// POST a new message for a project (or slab)
 router.post('/:slabId', authenticate, async (req: any, res: any) => {
   try {
     const { slabId } = req.params;
@@ -39,18 +53,25 @@ router.post('/:slabId', authenticate, async (req: any, res: any) => {
       return res.status(400).json({ message: 'slabId and message are required' });
     }
 
-    // Resolve projectId if not supplied
-    let targetProjectId = projectId;
-    if (!targetProjectId) {
-      const slab = await prisma.slab.findUnique({
-        where: { id: slabId },
-        select: { projectId: true }
-      });
-      if (slab) targetProjectId = slab.projectId;
-    }
+    // Resolve projectId and slabId
+    let targetProjectId = projectId ? String(projectId) : '';
+    let targetSlabId = String(slabId);
 
-    if (!targetProjectId) {
-      return res.status(400).json({ message: 'Associated project not found for slab' });
+    const existingSlab = await prisma.slab.findUnique({
+      where: { id: String(slabId) },
+      select: { id: true, projectId: true }
+    }).catch(() => null);
+
+    if (existingSlab) {
+      targetSlabId = existingSlab.id;
+      if (!targetProjectId) targetProjectId = existingSlab.projectId;
+    } else {
+      if (!targetProjectId) targetProjectId = String(slabId);
+      const firstSlab = await prisma.slab.findFirst({
+        where: { projectId: targetProjectId },
+        select: { id: true }
+      }).catch(() => null);
+      targetSlabId = firstSlab?.id || targetProjectId;
     }
 
     const user = req.user;
@@ -59,14 +80,14 @@ router.post('/:slabId', authenticate, async (req: any, res: any) => {
 
     const newMsg = await prisma.productMessage.create({
       data: {
-        slabId,
+        slabId: targetSlabId,
         projectId: targetProjectId,
         senderId: user?.id ? String(user.id) : undefined,
         senderName: user?.name || 'Staff User',
         senderRole,
         message: message.trim(),
         attachments: Array.isArray(attachments) ? attachments : [],
-        isReadByAdmin: isSenderAdmin, // Admin's own messages are automatically marked read
+        isReadByAdmin: isSenderAdmin,
         readAt: isSenderAdmin ? new Date() : null
       }
     });
@@ -81,15 +102,26 @@ router.post('/:slabId', authenticate, async (req: any, res: any) => {
   }
 });
 
-// PATCH mark all messages in a slab as read (called by Admin/Manager)
+// PATCH mark all messages in a project/slab as read (called by Admin/Manager)
 router.patch('/read/:slabId', authenticate, async (req: any, res: any) => {
   try {
     const { slabId } = req.params;
-    const user = req.user;
+
+    let targetProjectId = slabId;
+    const slab = await prisma.slab.findUnique({
+      where: { id: slabId },
+      select: { projectId: true }
+    }).catch(() => null);
+    if (slab?.projectId) {
+      targetProjectId = slab.projectId;
+    }
 
     const result = await prisma.productMessage.updateMany({
       where: {
-        slabId,
+        OR: [
+          { projectId: targetProjectId },
+          { slabId }
+        ],
         isReadByAdmin: false
       },
       data: {
@@ -111,7 +143,6 @@ router.patch('/read/:slabId', authenticate, async (req: any, res: any) => {
 // GET unread alerts for admin dashboard
 router.get('/unread/admin-alerts', authenticate, async (req: any, res: any) => {
   try {
-    // Fetch unread messages from non-admin senders
     const unreadMessages = await prisma.productMessage.findMany({
       where: {
         isReadByAdmin: false,
@@ -119,24 +150,22 @@ router.get('/unread/admin-alerts', authenticate, async (req: any, res: any) => {
       },
       orderBy: { createdAt: 'desc' },
       include: {
-        slab: {
-          select: { id: true, name: true, size: true }
-        },
         project: {
           select: { id: true, name: true, projectId: true, clientName: true }
         }
       }
     });
 
-    // Group by slabId
-    const slabMap = new Map<string, any>();
+    // Group by projectId so each project has one unified chat alert
+    const projectMap = new Map<string, any>();
 
     for (const msg of unreadMessages) {
-      if (!slabMap.has(msg.slabId)) {
-        slabMap.set(msg.slabId, {
-          slabId: msg.slabId,
-          slabName: msg.slab?.name || 'Unnamed Product',
-          slabSize: msg.slab?.size || '',
+      const pKey = msg.projectId || msg.slabId;
+      if (!projectMap.has(pKey)) {
+        projectMap.set(pKey, {
+          slabId: pKey,
+          slabName: msg.project?.name || 'Work Order Chat',
+          slabSize: '',
           projectId: msg.projectId,
           projectName: msg.project?.name || 'Work Order',
           workOrderId: msg.project?.projectId || '',
@@ -149,12 +178,12 @@ router.get('/unread/admin-alerts', authenticate, async (req: any, res: any) => {
           unreadCount: 1
         });
       } else {
-        const item = slabMap.get(msg.slabId);
+        const item = projectMap.get(pKey);
         item.unreadCount += 1;
       }
     }
 
-    const alerts = Array.from(slabMap.values());
+    const alerts = Array.from(projectMap.values());
 
     res.json({
       totalUnread: unreadMessages.length,
