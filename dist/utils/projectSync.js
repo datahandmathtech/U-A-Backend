@@ -274,11 +274,34 @@ const syncSlabsAndQuotationFromProducts = async (projectId, incomingProducts, op
             const removeSlabIds = slabsToRemove.map(s => s.id);
             const pieces = await index_1.prisma.piece.findMany({ where: { slabId: { in: removeSlabIds } }, select: { id: true } });
             const pieceIds = pieces.map(p => p.id);
+            const allRemovedIds = [...removeSlabIds, ...pieceIds];
             if (pieceIds.length > 0) {
                 await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }).catch(() => { });
             }
+            if (allRemovedIds.length > 0) {
+                await index_1.prisma.productionLog.deleteMany({
+                    where: {
+                        OR: [
+                            { slabId: { in: removeSlabIds } },
+                            { productId: { in: allRemovedIds } },
+                            { pieceIds: { hasSome: allRemovedIds } }
+                        ]
+                    }
+                }).catch(() => { });
+                await index_1.prisma.machineLog.deleteMany({
+                    where: { productId: { in: allRemovedIds } }
+                }).catch(() => { });
+            }
             await index_1.prisma.piece.deleteMany({ where: { slabId: { in: removeSlabIds } } }).catch(() => { });
             await index_1.prisma.slab.deleteMany({ where: { id: { in: removeSlabIds } } }).catch(() => { });
+        }
+        if (validIncoming.length === 0) {
+            await Promise.all([
+                index_1.prisma.productionLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => { }),
+                index_1.prisma.machineLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => { }),
+                index_1.prisma.crate.deleteMany({ where: { projectId: String(projectId) } }).catch(() => { }),
+                index_1.prisma.dispatch.deleteMany({ where: { projectId: String(projectId) } }).catch(() => { })
+            ]);
         }
     }
     if (updateQuotationRecord) {

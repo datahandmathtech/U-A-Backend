@@ -219,12 +219,50 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
     const mongoose = require('mongoose');
     let db = mongoose.connection?.db;
 
+    // Auto-reconcile orphaned ProductionLogs when slabs/pieces have been deleted
+    const activeSlabs = await prisma.slab.findMany({
+      where: { projectId: String(projectId) },
+      select: { id: true, pieces: { select: { id: true } } }
+    });
+    if (activeSlabs.length === 0) {
+      await Promise.all([
+        prisma.productionLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.machineLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.crate.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.dispatch.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {})
+      ]);
+      return res.json([]);
+    }
+    const validIds = new Set<string>();
+    activeSlabs.forEach((s: any) => {
+      validIds.add(String(s.id));
+      if (Array.isArray(s.pieces)) {
+        s.pieces.forEach((p: any) => validIds.add(String(p.id)));
+      }
+    });
+
     if (db) {
       try {
         const query = { $or: [{ projectId: String(projectId) }, { projectId: mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : projectId }] };
         const rawLogs = await db.collection('ProductionLog').find(query).sort({ createdAt: 1 }).toArray();
-        const machineIds = rawLogs.map((l: any) => l.machineId).filter(Boolean);
-        const workerIds = rawLogs.map((l: any) => l.workerId).filter(Boolean);
+        const orphanLogIds: any[] = [];
+        const validRawLogs = rawLogs.filter((l: any) => {
+          const logPieceIds = Array.isArray(l.pieceIds) ? l.pieceIds.map(String) : [];
+          if (logPieceIds.length > 0 && !logPieceIds.some((pid: string) => validIds.has(pid))) {
+            orphanLogIds.push(l._id);
+            return false;
+          }
+          if (l.slabId && String(l.slabId) !== 'all' && !validIds.has(String(l.slabId)) && logPieceIds.length === 0) {
+            orphanLogIds.push(l._id);
+            return false;
+          }
+          return true;
+        });
+        if (orphanLogIds.length > 0) {
+          db.collection('ProductionLog').deleteMany({ _id: { $in: orphanLogIds } }).catch(() => {});
+        }
+        const machineIds = validRawLogs.map((l: any) => l.machineId).filter(Boolean);
+        const workerIds = validRawLogs.map((l: any) => l.workerId).filter(Boolean);
 
         const machineObjIds = machineIds.filter((mId: string) => mongoose.Types.ObjectId.isValid(mId)).map((mId: string) => new mongoose.Types.ObjectId(mId));
         const workerObjIds = workerIds.filter((wId: string) => mongoose.Types.ObjectId.isValid(wId)).map((wId: string) => new mongoose.Types.ObjectId(wId));
@@ -240,7 +278,7 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         const workerMap = new Map();
         rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name }));
 
-        const enriched = rawLogs.map((l: any) => ({
+        const enriched = validRawLogs.map((l: any) => ({
           ...l,
           id: l._id.toString(),
           machine: l.machineId ? machineMap.get(l.machineId.toString()) || null : null,

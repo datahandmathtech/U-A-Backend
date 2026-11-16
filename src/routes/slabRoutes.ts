@@ -586,6 +586,21 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
 
         slabs = rawSlabs.map((s: any) => {
           const slabInvKey = s.inventoryId?.toString();
+          const slabPieces = pieceMap.get(s._id.toString()) || [];
+          const slabIsFeet = /\bfeet\b/i.test((s.size || '').split('|')[0] || '');
+          if (slabIsFeet && Array.isArray(slabPieces)) {
+            slabPieces.forEach((p: any) => {
+              if (p.size && /\binch\b/i.test(p.size) && !/\(\s*[\d.]+\s*Sq\.?Ft\s*\)/i.test(p.size)) {
+                const lM = p.size.match(/([\d.]+)\s*L/i);
+                const wM = p.size.match(/([\d.]+)\s*W/i);
+                const lVal = lM && lM[1] ? parseFloat(lM[1]) : 0;
+                const wVal = wM && wM[1] ? parseFloat(wM[1]) : 0;
+                const areaStr = (lVal > 0 && wVal > 0) ? ` (${(lVal * wVal).toFixed(2)} Sq.Ft)` : '';
+                p.size = p.size.replace(/\binch\b/i, 'Feet') + areaStr;
+                prisma.piece.update({ where: { id: p.id }, data: { size: p.size } }).catch(() => {});
+              }
+            });
+          }
           return {
             id: s._id.toString(),
             projectId: s.projectId?.toString() || s.projectId,
@@ -597,7 +612,7 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             status: s.status,
             requiredStages: s.requiredStages,
             createdAt: s.createdAt,
-            pieces: pieceMap.get(s._id.toString()) || []
+            pieces: slabPieces
           };
         });
 
@@ -659,8 +674,18 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
     });
 
     uniquePrismaSlabs.forEach((s: any) => {
+      const slabIsFeet = /\bfeet\b/i.test((s.size || '').split('|')[0] || '');
       if (Array.isArray(s.pieces)) {
         s.pieces.forEach((p: any) => {
+          if (slabIsFeet && p.size && /\binch\b/i.test(p.size) && !/\(\s*[\d.]+\s*Sq\.?Ft\s*\)/i.test(p.size)) {
+            const lM = p.size.match(/([\d.]+)\s*L/i);
+            const wM = p.size.match(/([\d.]+)\s*W/i);
+            const lVal = lM && lM[1] ? parseFloat(lM[1]) : 0;
+            const wVal = wM && wM[1] ? parseFloat(wM[1]) : 0;
+            const areaStr = (lVal > 0 && wVal > 0) ? ` (${(lVal * wVal).toFixed(2)} Sq.Ft)` : '';
+            p.size = p.size.replace(/\binch\b/i, 'Feet') + areaStr;
+            prisma.piece.update({ where: { id: p.id }, data: { size: p.size } }).catch(() => {});
+          }
           const normStage = (p.stage || '').replace(' Work', '').trim();
           if (normStage === 'Packing' || normStage === 'Dispatch') {
             const hasApprovedLog = Array.isArray(p.logs) && p.logs.some((l: any) => {
@@ -972,12 +997,16 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
       for (let i = 0; i < piecesArray.length; i++) {
         const l = Number(piecesArray[i].length) || 0;
         const w = Number(piecesArray[i].width) || 0;
+        const pUnit = String(piecesArray[i].unit || '').toLowerCase();
         let pieceArea = 0;
-        // Assume length/width are in inches for piece creation, so sq ft = (L * W) / 144
-        // Or if they are already in sq ft, we need to know. Usually dimensions are inches.
-        // Let's just calculate L * W / 144 if L and W are > 0.
         if (l > 0 && w > 0) {
-          pieceArea = (l * w) / 144;
+          if (pUnit === 'feet' || pUnit === 'ft' || pUnit === 'sq_ft' || pUnit === 'sqft') {
+            pieceArea = l * w;
+          } else if (pUnit === 'mm') {
+            pieceArea = (l * w) / 92903.04;
+          } else {
+            pieceArea = (l * w) / 144;
+          }
         }
 
         if (piecesArray[i].name?.includes('(Full Slab)')) {
@@ -1142,10 +1171,27 @@ router.post('/bulk-delete', authenticate, async (req, res) => {
     // Find all pieces under these slabs
     const pieces = await prisma.piece.findMany({ where: { slabId: { in: slabIds } } });
     const pieceIds = pieces.map(p => p.id);
+    const allRemovedIds = [...slabIds, ...pieceIds];
 
     if (pieceIds.length > 0) {
       await prisma.pieceLog.deleteMany({
         where: { pieceId: { in: pieceIds } }
+      }).catch(e => console.error(e));
+    }
+
+    if (allRemovedIds.length > 0) {
+      await prisma.productionLog.deleteMany({
+        where: {
+          OR: [
+            { slabId: { in: slabIds } },
+            { productId: { in: allRemovedIds } },
+            { pieceIds: { hasSome: allRemovedIds } }
+          ]
+        }
+      }).catch(e => console.error(e));
+
+      await prisma.machineLog.deleteMany({
+        where: { productId: { in: allRemovedIds } }
       }).catch(e => console.error(e));
     }
 
@@ -1158,6 +1204,15 @@ router.post('/bulk-delete', authenticate, async (req, res) => {
     }).catch(e => console.error(e));
 
     for (const projId of projectIds) {
+      const remainingSlabs = await prisma.slab.count({ where: { projectId: String(projId) } });
+      if (remainingSlabs === 0) {
+        await Promise.all([
+          prisma.productionLog.deleteMany({ where: { projectId: String(projId) } }).catch(() => {}),
+          prisma.machineLog.deleteMany({ where: { projectId: String(projId) } }).catch(() => {}),
+          prisma.crate.deleteMany({ where: { projectId: String(projId) } }).catch(() => {}),
+          prisma.dispatch.deleteMany({ where: { projectId: String(projId) } }).catch(() => {})
+        ]);
+      }
       await syncQuotationFromSlabs(String(projId)).catch((e) => console.error('Error syncing quotation after bulk-delete:', e));
       invalidateProjectCaches(String(projId));
     }
@@ -1183,12 +1238,27 @@ router.delete('/:id', authenticate, async (req, res) => {
     // Find all pieces
     const pieces = await prisma.piece.findMany({ where: { slabId: String(id) } });
     const pieceIds = pieces.map(p => p.id);
+    const allRemovedIds = [String(id), ...pieceIds];
     
     if (pieceIds.length > 0) {
       await prisma.pieceLog.deleteMany({
         where: { pieceId: { in: pieceIds } }
       }).catch(e => console.error(e));
     }
+
+    await prisma.productionLog.deleteMany({
+      where: {
+        OR: [
+          { slabId: String(id) },
+          { productId: { in: allRemovedIds } },
+          { pieceIds: { hasSome: allRemovedIds } }
+        ]
+      }
+    }).catch(e => console.error(e));
+
+    await prisma.machineLog.deleteMany({
+      where: { productId: { in: allRemovedIds } }
+    }).catch(e => console.error(e));
     
     await prisma.piece.deleteMany({
       where: { slabId: String(id) }
@@ -1199,8 +1269,18 @@ router.delete('/:id', authenticate, async (req, res) => {
     }).catch(e => console.error(e));
 
     if (existingSlab?.projectId) {
-      await syncQuotationFromSlabs(String(existingSlab.projectId)).catch((e) => console.error('Error syncing quotation after slab delete:', e));
-      invalidateProjectCaches(String(existingSlab.projectId));
+      const projIdStr = String(existingSlab.projectId);
+      const remainingSlabs = await prisma.slab.count({ where: { projectId: projIdStr } });
+      if (remainingSlabs === 0) {
+        await Promise.all([
+          prisma.productionLog.deleteMany({ where: { projectId: projIdStr } }).catch(() => {}),
+          prisma.machineLog.deleteMany({ where: { projectId: projIdStr } }).catch(() => {}),
+          prisma.crate.deleteMany({ where: { projectId: projIdStr } }).catch(() => {}),
+          prisma.dispatch.deleteMany({ where: { projectId: projIdStr } }).catch(() => {})
+        ]);
+      }
+      await syncQuotationFromSlabs(projIdStr).catch((e) => console.error('Error syncing quotation after slab delete:', e));
+      invalidateProjectCaches(projIdStr);
     } else {
       invalidateProjectCaches();
     }
@@ -1283,6 +1363,19 @@ router.delete('/piece/:id', authenticate, async (req, res) => {
     // First delete associated logs
     await prisma.pieceLog.deleteMany({
       where: { pieceId: String(id) }
+    }).catch(e => console.error(e));
+
+    await prisma.productionLog.deleteMany({
+      where: {
+        OR: [
+          { productId: String(id) },
+          { pieceIds: { has: String(id) } }
+        ]
+      }
+    }).catch(e => console.error(e));
+
+    await prisma.machineLog.deleteMany({
+      where: { productId: String(id) }
     }).catch(e => console.error(e));
     
     // Delete piece

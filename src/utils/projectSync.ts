@@ -284,11 +284,34 @@ export const syncSlabsAndQuotationFromProducts = async (
       const removeSlabIds = slabsToRemove.map(s => s.id);
       const pieces = await prisma.piece.findMany({ where: { slabId: { in: removeSlabIds } }, select: { id: true } });
       const pieceIds = pieces.map(p => p.id);
+      const allRemovedIds = [...removeSlabIds, ...pieceIds];
       if (pieceIds.length > 0) {
         await prisma.pieceLog.deleteMany({ where: { pieceId: { in: pieceIds } } }).catch(() => {});
       }
+      if (allRemovedIds.length > 0) {
+        await prisma.productionLog.deleteMany({
+          where: {
+            OR: [
+              { slabId: { in: removeSlabIds } },
+              { productId: { in: allRemovedIds } },
+              { pieceIds: { hasSome: allRemovedIds } }
+            ]
+          }
+        }).catch(() => {});
+        await prisma.machineLog.deleteMany({
+          where: { productId: { in: allRemovedIds } }
+        }).catch(() => {});
+      }
       await prisma.piece.deleteMany({ where: { slabId: { in: removeSlabIds } } }).catch(() => {});
       await prisma.slab.deleteMany({ where: { id: { in: removeSlabIds } } }).catch(() => {});
+    }
+    if (validIncoming.length === 0) {
+      await Promise.all([
+        prisma.productionLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.machineLog.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.crate.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {}),
+        prisma.dispatch.deleteMany({ where: { projectId: String(projectId) } }).catch(() => {})
+      ]);
     }
   }
 
