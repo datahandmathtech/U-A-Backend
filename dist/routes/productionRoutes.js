@@ -204,7 +204,7 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
         // Auto-reconcile orphaned ProductionLogs when slabs/pieces have been deleted
         const activeSlabs = await index_1.prisma.slab.findMany({
             where: { projectId: String(projectId) },
-            select: { id: true, pieces: { select: { id: true } } }
+            select: { id: true, name: true, createdAt: true, pieces: { select: { id: true, productName: true } } }
         });
         if (activeSlabs.length === 0) {
             await Promise.all([
@@ -216,10 +216,23 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
             return res.json([]);
         }
         const validIds = new Set();
+        const validNames = new Set();
+        let oldestSlabTime = Infinity;
         activeSlabs.forEach((s) => {
             validIds.add(String(s.id));
+            if (s.name)
+                validNames.add(String(s.name).trim().toLowerCase());
+            if (s.createdAt) {
+                const t = new Date(s.createdAt).getTime();
+                if (!isNaN(t) && t < oldestSlabTime)
+                    oldestSlabTime = t;
+            }
             if (Array.isArray(s.pieces)) {
-                s.pieces.forEach((p) => validIds.add(String(p.id)));
+                s.pieces.forEach((p) => {
+                    validIds.add(String(p.id));
+                    if (p.productName)
+                        validNames.add(String(p.productName).trim().toLowerCase());
+                });
             }
         });
         if (db) {
@@ -229,13 +242,32 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                 const orphanLogIds = [];
                 const validRawLogs = rawLogs.filter((l) => {
                     const logPieceIds = Array.isArray(l.pieceIds) ? l.pieceIds.map(String) : [];
-                    if (logPieceIds.length > 0 && !logPieceIds.some((pid) => validIds.has(pid))) {
+                    if (logPieceIds.length > 0) {
+                        if (!logPieceIds.some((pid) => validIds.has(pid))) {
+                            orphanLogIds.push(l._id);
+                            return false;
+                        }
+                        return true;
+                    }
+                    if (l.slabId && String(l.slabId) !== 'all' && !validIds.has(String(l.slabId))) {
                         orphanLogIds.push(l._id);
                         return false;
                     }
-                    if (l.slabId && String(l.slabId) !== 'all' && !validIds.has(String(l.slabId)) && logPieceIds.length === 0) {
+                    if (l.productId && String(l.productId) !== 'all' && !validIds.has(String(l.productId))) {
                         orphanLogIds.push(l._id);
                         return false;
+                    }
+                    const logProdName = (l.productName || '').trim().toLowerCase();
+                    if (logProdName && logProdName !== 'all' && logProdName !== 'all slabs' && !validNames.has(logProdName)) {
+                        orphanLogIds.push(l._id);
+                        return false;
+                    }
+                    if (oldestSlabTime !== Infinity && l.createdAt) {
+                        const logTime = new Date(l.createdAt).getTime();
+                        if (!isNaN(logTime) && logTime < oldestSlabTime - 5000) {
+                            orphanLogIds.push(l._id);
+                            return false;
+                        }
                     }
                     return true;
                 });

@@ -499,11 +499,11 @@ export const ensureMergedProductsForProject = (
       mergedProducts.push(parseSlabToProduct(slab));
       needsDbSync = true;
     } else {
-      // Check if single-qty product needs dimension/name sync from slab
+      // Check if product needs dimension/name sync from slab
       const ep = mergedProducts[existingIdx];
       const qty = Math.max(1, Number(ep.qty) || 1);
+      const synced = parseSlabToProduct(slab, ep);
       if (qty === 1) {
-        const synced = parseSlabToProduct(slab, ep);
         if (
           synced.category !== ep.category ||
           synced.length !== Number(ep.length) ||
@@ -513,6 +513,21 @@ export const ensureMergedProductsForProject = (
           mergedProducts[existingIdx] = synced;
           needsDbSync = true;
         }
+      } else if (
+        synced.length !== Number(ep.length) ||
+        synced.width !== Number(ep.width) ||
+        synced.breadth !== Number(ep.breadth ?? ep.thickness)
+      ) {
+        mergedProducts[existingIdx] = {
+          ...ep,
+          length: synced.length,
+          width: synced.width,
+          breadth: synced.breadth,
+          thickness: synced.thickness,
+          dimensionUnit: synced.dimensionUnit,
+          sqft: Number((synced.sqft * qty).toFixed(2))
+        };
+        needsDbSync = true;
       }
     }
   }
