@@ -456,6 +456,16 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         rawPieceLogs.forEach((l: any) => {
           const pk = l.pieceId?.toString();
           if (!pieceLogMap.has(pk)) pieceLogMap.set(pk, []);
+          let effectiveEndTime = l.endTime || l.createdAt || null;
+          let effectiveStartTime = l.startTime || null;
+          if (l.endTime && l.createdAt && new Date(l.endTime).getTime() - new Date(l.createdAt).getTime() > 60000) {
+            effectiveEndTime = l.createdAt;
+            db.collection('PieceLog').updateOne({ _id: l._id }, { $set: { endTime: l.createdAt } }).catch(() => {});
+          }
+          if (l.startTime && l.createdAt && new Date(l.startTime).getTime() - new Date(l.createdAt).getTime() > 60000) {
+            effectiveStartTime = l.createdAt;
+            db.collection('PieceLog').updateOne({ _id: l._id }, { $set: { startTime: l.createdAt } }).catch(() => {});
+          }
           pieceLogMap.get(pk).push({
             id: l._id.toString(),
             stage: l.stage,
@@ -465,7 +475,8 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             startPhotoUrl: l.startPhotoUrl || null,
             endPhotoUrl: l.endPhotoUrl || null,
             remarks: l.remarks || null,
-            endTime: l.endTime || null,
+            startTime: effectiveStartTime,
+            endTime: effectiveEndTime,
             createdAt: l.createdAt
           });
         });

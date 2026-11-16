@@ -1736,8 +1736,17 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
       : 'completed';
 
     const now = new Date();
-    const parsedStartTime = req.body.startTime ? new Date(req.body.startTime) : now;
-    const parsedEndTime = req.body.endTime ? new Date(req.body.endTime) : now;
+    const parseClientTime = (val: any, fallback: Date): Date => {
+      if (!val) return fallback;
+      const str = String(val).trim();
+      const d = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)
+        ? new Date(`${str}+05:30`)
+        : new Date(str);
+      if (isNaN(d.getTime()) || d.getTime() > now.getTime() + 60000) return fallback;
+      return d;
+    };
+    const parsedStartTime = parseClientTime(req.body.startTime, now);
+    const parsedEndTime = now; // Approval / completion time is always current time only
 
     const pieceUpdateData: any = {
       status: targetStatus,
@@ -2219,6 +2228,17 @@ router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) =
       orderBy: { createdAt: 'desc' }
     });
 
+    const nowEdit = new Date();
+    const parseEditTime = (val: any, fallback: Date): Date => {
+      if (!val) return fallback;
+      const str = String(val).trim();
+      const d = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(str)
+        ? new Date(`${str}+05:30`)
+        : new Date(str);
+      if (isNaN(d.getTime()) || d.getTime() > nowEdit.getTime() + 60000) return fallback;
+      return d;
+    };
+
     if (pieceLog) {
       pieceLog = await prisma.pieceLog.update({
         where: { id: pieceLog.id },
@@ -2228,8 +2248,8 @@ router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) =
           endPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
           startPhotoUrl: photoUrl !== undefined ? photoUrl : undefined,
           remarks: remarks !== undefined ? remarks : undefined,
-          startTime: startTime ? new Date(startTime) : undefined,
-          endTime: endTime ? new Date(endTime) : undefined
+          startTime: startTime ? parseEditTime(startTime, nowEdit) : undefined,
+          endTime: nowEdit
         }
       });
     }
@@ -2256,8 +2276,8 @@ router.patch('/quick-edit-piece-log', authenticate, async (req: any, res: any) =
     // Update / Create MachineLog for LogBook
     if (machineId) {
       try {
-        const parsedStartTime = startTime ? new Date(startTime) : new Date();
-        const parsedEndTime = endTime ? new Date(endTime) : new Date();
+        const parsedStartTime = parseEditTime(startTime, nowEdit);
+        const parsedEndTime = nowEdit;
         const durationHours = Math.max(0.1, (parsedEndTime.getTime() - parsedStartTime.getTime()) / (1000 * 60 * 60));
 
         const existingMLog = await prisma.machineLog.findFirst({
