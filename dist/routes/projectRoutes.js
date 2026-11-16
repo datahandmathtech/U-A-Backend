@@ -4,6 +4,7 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const fastCache_1 = require("../utils/fastCache");
+const projectSync_1 = require("../utils/projectSync");
 const router = (0, express_1.Router)();
 // Get all projects
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -62,10 +63,14 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     const pId = p._id.toString();
                     const assignedName = p.assignedToId ? userMap.get(p.assignedToId) : null;
                     const firstQuote = quoteMap.get(pId);
+                    const projSlabs = slabMap.get(pId) || [];
+                    const { products: mergedProducts } = (0, projectSync_1.ensureMergedProductsForProject)(pId, projSlabs, firstQuote ? [{ ...firstQuote, id: firstQuote._id.toString() }] : []);
                     let calculatedTotalPieces = Number(p.totalPieces) || 0;
-                    let products = firstQuote?.products || [];
-                    if (calculatedTotalPieces <= 0 && Array.isArray(products) && products.length > 0) {
-                        const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+                    if (projSlabs.length > 0) {
+                        calculatedTotalPieces = projSlabs.length;
+                    }
+                    else if (calculatedTotalPieces <= 0 && Array.isArray(mergedProducts) && mergedProducts.length > 0) {
+                        const sum = mergedProducts.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
                         if (sum > 0)
                             calculatedTotalPieces = sum;
                     }
@@ -94,8 +99,8 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                         isDirectWorkOrder: p.isDirectWorkOrder || false,
                         createdAt: p.createdAt,
                         updatedAt: p.updatedAt,
-                        products,
-                        slabs: slabMap.get(pId) || []
+                        products: mergedProducts,
+                        slabs: projSlabs
                     };
                 });
                 fastCache_1.fastCache.set('all_projects', enrichedProjects, 60);
@@ -109,7 +114,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             orderBy: { createdAt: 'desc' },
             include: {
                 assignedTo: { select: { name: true } },
-                quotations: { select: { products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
+                quotations: { select: { id: true, products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
                 slabs: {
                     select: {
                         id: true,
@@ -132,23 +137,22 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             }
         });
         enrichedProjects = projects.map(p => {
+            const projSlabs = p.slabs || [];
+            const { products: mergedProducts } = (0, projectSync_1.ensureMergedProductsForProject)(p.id, projSlabs, p.quotations || []);
             let calculatedTotalPieces = Number(p.totalPieces) || 0;
-            if (calculatedTotalPieces <= 0 && p.quotations && p.quotations.length > 0) {
-                const firstQuote = p.quotations[0];
-                if (firstQuote && firstQuote.products) {
-                    const products = firstQuote.products;
-                    if (Array.isArray(products) && products.length > 0) {
-                        const sum = products.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
-                        if (sum > 0)
-                            calculatedTotalPieces = sum;
-                    }
-                }
+            if (projSlabs.length > 0) {
+                calculatedTotalPieces = projSlabs.length;
+            }
+            else if (calculatedTotalPieces <= 0 && Array.isArray(mergedProducts) && mergedProducts.length > 0) {
+                const sum = mergedProducts.reduce((acc, curr) => acc + (Number(curr.qty) || 0), 0);
+                if (sum > 0)
+                    calculatedTotalPieces = sum;
             }
             const { quotations, ...projectData } = p;
             return {
                 ...projectData,
-                products: p.quotations?.[0]?.products || [],
-                slabs: p.slabs || [],
+                products: mergedProducts,
+                slabs: projSlabs,
                 totalPieces: calculatedTotalPieces,
                 completedPieces: projectData.completedPieces || 0,
                 deliveryDate: projectData.deadline || projectData.deliveryDate,
@@ -181,14 +185,23 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
                 const rawProj = await db.collection('Project').findOne(pQuery);
                 if (rawProj) {
                     const pId = rawProj._id.toString();
+                    const pObjId = rawProj._id;
                     const pCustomId = rawProj.id || pId;
-                    const [invoices, quotations, user] = await Promise.all([
-                        db.collection('Invoice').find({ $or: [{ projectId: pId }, { projectId: pCustomId }] }).toArray(),
-                        db.collection('Quotation').find({ $or: [{ projectId: pId }, { projectId: pCustomId }] }).sort({ createdAt: -1 }).toArray(),
+                    const projRefQuery = { $or: [{ projectId: pId }, { projectId: pObjId }, { projectId: pCustomId }] };
+                    const [invoices, quotations, rawSlabs, user] = await Promise.all([
+                        db.collection('Invoice').find(projRefQuery).toArray(),
+                        db.collection('Quotation').find(projRefQuery).sort({ createdAt: -1 }).toArray(),
+                        db.collection('Slab').find(projRefQuery).sort({ createdAt: 1 }).toArray(),
                         rawProj.assignedToId ? db.collection('User').findOne({ $or: [{ _id: mongoose.Types.ObjectId.isValid(rawProj.assignedToId) ? new mongoose.Types.ObjectId(rawProj.assignedToId) : null }, { id: rawProj.assignedToId }] }, { projection: { name: 1 } }) : null
                     ]);
+                    const formattedSlabs = rawSlabs.map((s) => ({ ...s, id: s._id.toString() }));
+                    const formattedQuotes = quotations.map((q) => ({ ...q, id: q._id.toString() }));
+                    const { products: mergedProducts, quotations: mergedQuotes, needsDbSync } = (0, projectSync_1.ensureMergedProductsForProject)(pId, formattedSlabs, formattedQuotes);
+                    if (needsDbSync) {
+                        (0, projectSync_1.syncQuotationFromSlabs)(pId).catch(() => { });
+                    }
                     return res.json({
-                        id: rawProj._id.toString(),
+                        id: pId,
                         projectId: rawProj.projectId,
                         name: rawProj.name,
                         description: rawProj.description,
@@ -203,7 +216,7 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
                         startDate: rawProj.startDate,
                         deadline: rawProj.deadline,
                         deliveryDate: rawProj.deadline || rawProj.deliveryDate,
-                        totalPieces: rawProj.totalPieces || 0,
+                        totalPieces: formattedSlabs.length || rawProj.totalPieces || 0,
                         completedPieces: rawProj.completedPieces || 0,
                         progressPercentage: rawProj.progressPercentage || 0,
                         assignedToId: rawProj.assignedToId,
@@ -212,8 +225,10 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
                         isDirectWorkOrder: rawProj.isDirectWorkOrder || false,
                         createdAt: rawProj.createdAt,
                         updatedAt: rawProj.updatedAt,
+                        products: mergedProducts,
+                        slabs: formattedSlabs,
                         invoices: invoices.map((inv) => ({ ...inv, id: inv._id.toString() })),
-                        quotations: quotations.map((q) => ({ ...q, id: q._id.toString() }))
+                        quotations: mergedQuotes
                     });
                 }
             }
@@ -231,6 +246,7 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
             include: {
                 assignedTo: { select: { name: true } },
                 invoices: true,
+                slabs: { orderBy: { createdAt: 'asc' } },
                 quotations: {
                     orderBy: { createdAt: 'desc' }
                 }
@@ -238,7 +254,15 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
         });
         if (!project)
             return res.status(404).json({ message: 'Project not found' });
-        res.json(project);
+        const { products: mergedProducts, quotations: mergedQuotes, needsDbSync } = (0, projectSync_1.ensureMergedProductsForProject)(project.id, project.slabs || [], project.quotations || []);
+        if (needsDbSync) {
+            (0, projectSync_1.syncQuotationFromSlabs)(project.id).catch(() => { });
+        }
+        res.json({
+            ...project,
+            products: mergedProducts,
+            quotations: mergedQuotes
+        });
     }
     catch (error) {
         console.error('Error fetching project by id:', error);
@@ -307,54 +331,19 @@ router.post('/:id/sync-slabs', authMiddleware_1.authenticate, async (req, res) =
         });
         if (!project)
             return res.status(404).json({ message: 'Project not found' });
-        const existingSlabs = await index_1.prisma.slab.findMany({ where: { projectId: String(id) }, select: { name: true } });
-        const existingNames = new Set(existingSlabs.map(s => s.name));
-        const desiredSlabs = [];
-        if (project.quotations.length > 0) {
-            const firstQuote = project.quotations[0];
-            if (firstQuote && firstQuote.products) {
-                const products = firstQuote.products;
-                for (const prod of products) {
-                    const qty = Number(prod.qty) || 1;
-                    for (let i = 1; i <= qty; i++) {
-                        const pieceName = qty > 1 ? String(prod.category || 'Product') + ' ' + i : String(prod.category || 'Product');
-                        const sizeStr = String(prod.length || 0) + 'L x ' + String(prod.width || 0) + 'W' + (prod.breadth ? ' | ' + prod.breadth + 'MM' : '');
-                        desiredSlabs.push({ name: pieceName, size: sizeStr });
-                    }
-                }
-            }
+        const firstQuote = project.quotations[0];
+        const quoteProducts = Array.isArray(firstQuote?.products) ? firstQuote.products : [];
+        if (quoteProducts.length > 0) {
+            await (0, projectSync_1.syncSlabsAndQuotationFromProducts)(project.id, quoteProducts, {
+                removeUnmatchedSlabs: true,
+                updateQuotationRecord: true
+            });
         }
-        let addedCount = 0;
-        let updatedCount = 0;
-        // Fetch full existing slabs for comparison
-        const fullExistingSlabs = await index_1.prisma.slab.findMany({ where: { projectId: String(id) } });
-        const slabMap = new Map(fullExistingSlabs.map(s => [s.name, s]));
-        for (const desired of desiredSlabs) {
-            if (!slabMap.has(desired.name)) {
-                await index_1.prisma.slab.create({
-                    data: {
-                        projectId: project.id,
-                        name: desired.name,
-                        size: desired.size,
-                        status: 'pending'
-                    }
-                });
-                slabMap.set(desired.name, { name: desired.name });
-                addedCount++;
-            }
-            else {
-                // Update size if it has changed
-                const existing = slabMap.get(desired.name);
-                if (existing && existing.size !== desired.size) {
-                    await index_1.prisma.slab.update({
-                        where: { id: existing.id },
-                        data: { size: desired.size }
-                    });
-                    updatedCount++;
-                }
-            }
+        else if (project.slabs.length > 0) {
+            await (0, projectSync_1.syncQuotationFromSlabs)(project.id);
         }
-        res.json({ message: 'Synced new slabs.' });
+        (0, projectSync_1.invalidateProjectCaches)(project.id);
+        res.json({ message: 'Synced slabs and quotation products.' });
     }
     catch (error) {
         console.error(error);
@@ -427,173 +416,26 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
             include: { slabs: true, quotations: { orderBy: { createdAt: 'desc' } } }
         });
         // Sync incoming products & slabs if provided during edit
-        if (incomingProducts && incomingProducts.length > 0) {
-            const quotationProducts = incomingProducts
-                .filter((prod) => prod.name && (prod.length || prod.width))
-                .map((prod, i) => {
-                const u = (prod.unit || 'pieces').toLowerCase().trim();
-                const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
-                let isFt = false;
-                let isMM = false;
-                if (isPieces) {
-                    const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
-                    isFt = dimU === 'sq_ft' || dimU === 'feet' || dimU === 'ft';
-                    isMM = dimU === 'mm';
-                }
-                else {
-                    isFt = u.includes('sq') || u.includes('ft') || u.includes('feet');
-                    isMM = u.includes('mm');
-                }
-                const dimUnit = isFt ? 'sq_ft' : (isMM ? 'mm' : 'inch');
-                const l = parseFloat(prod.length) || 0;
-                const w = parseFloat(prod.width) || 0;
-                const sqft = isFt ? l * w : (isMM ? (l * w) / 92903.04 : (l * w) / 144);
-                return {
-                    id: prod.id || `prod_${Date.now()}_${i}`,
-                    category: prod.name,
-                    productName: prod.name,
-                    unit: prod.unit || 'pieces',
-                    dimensionUnit: dimUnit,
-                    length: l,
-                    width: w,
-                    breadth: parseFloat(prod.thickness) || 0,
-                    qty: 1,
-                    rate: 0,
-                    amount: 0,
-                    sqft: Number(sqft.toFixed(2))
-                };
+        if (incomingProducts) {
+            await (0, projectSync_1.syncSlabsAndQuotationFromProducts)(String(id), incomingProducts, {
+                removeUnmatchedSlabs: true,
+                updateQuotationRecord: true
             });
-            // Update or create quotation
-            const existingQuotes = await index_1.prisma.quotation.findMany({
-                where: { projectId: String(id) },
-                orderBy: { createdAt: 'desc' }
-            });
-            const firstQuote = existingQuotes[0];
-            if (firstQuote) {
-                await index_1.prisma.quotation.update({
-                    where: { id: firstQuote.id },
-                    data: { products: quotationProducts }
-                });
-            }
-            else if (quotationProducts.length > 0) {
-                await index_1.prisma.quotation.create({
-                    data: {
-                        projectId: String(id),
-                        products: quotationProducts,
-                        status: 'approved',
-                        quotationNumber: `Q-${Math.floor(1000 + Math.random() * 9000)}`
-                    }
-                });
-            }
-            // Sync Slabs with incoming products
-            const currentSlabs = await index_1.prisma.slab.findMany({
-                where: { projectId: String(id) },
-                include: { pieces: true }
-            });
-            for (const prod of incomingProducts) {
-                if (!prod.name || (!prod.length && !prod.width))
-                    continue;
-                const u = (prod.unit || 'pieces').toLowerCase().trim();
-                const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
-                let isFt = false;
-                let isMM = false;
-                if (isPieces) {
-                    const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
-                    isFt = dimU === 'sq_ft' || dimU === 'feet' || dimU === 'ft';
-                    isMM = dimU === 'mm';
-                }
-                else {
-                    isFt = u.includes('sq') || u.includes('ft') || u.includes('feet');
-                    isMM = u.includes('mm');
-                }
-                const unitLabel = isFt ? 'Feet' : (isMM ? 'MM' : 'Inch');
-                const l = parseFloat(prod.length) || 0;
-                const w = parseFloat(prod.width) || 0;
-                const calcSqFt = (isFt ? l * w : isMM ? (l * w) / 92903.04 : (l * w) / 144).toFixed(2);
-                const sizeFormatted = `${prod.length || 0}L x ${prod.width || 0}W ${unitLabel}${prod.thickness ? ` | ${prod.thickness}MM` : ''} (${calcSqFt} Sq.Ft)`;
-                let matched = null;
-                if (prod.id) {
-                    matched = currentSlabs.find(s => s.id === prod.id);
-                }
-                if (!matched) {
-                    matched = currentSlabs.find(s => s.name.trim().toLowerCase() === prod.name.trim().toLowerCase());
-                }
-                if (matched) {
-                    await index_1.prisma.slab.update({
-                        where: { id: matched.id },
-                        data: { name: prod.name, size: sizeFormatted }
-                    });
-                    if (matched.pieces.length === 1) {
-                        await index_1.prisma.piece.updateMany({
-                            where: { slabId: matched.id },
-                            data: { size: sizeFormatted, productName: `${prod.name} 1.1 (Full Slab)` }
-                        });
-                    }
-                }
-                else {
-                    const newSlab = await index_1.prisma.slab.create({
-                        data: {
-                            projectId: String(id),
-                            name: prod.name,
-                            size: sizeFormatted,
-                            cost: 0,
-                            requiredStages: ['Production', 'Polishing', 'Packing', 'Dispatch']
-                        }
-                    });
-                    await index_1.prisma.piece.create({
-                        data: {
-                            slabId: newSlab.id,
-                            pieceNumber: 1,
-                            productName: `${prod.name} 1.1 (Full Slab)`,
-                            size: sizeFormatted,
-                            stage: 'Production',
-                            status: 'pending'
-                        }
-                    });
-                }
-            }
-            // Update totalPieces on project
-            if (!updateData.totalPieces && quotationProducts.length > 0) {
-                await index_1.prisma.project.update({
-                    where: { id: String(id) },
-                    data: { totalPieces: quotationProducts.length }
-                });
-            }
-            fastCache_1.fastCache.invalidate('slabs_project_');
-            fastCache_1.fastCache.invalidate('all_projects');
-            fastCache_1.fastCache.invalidate('project_hierarchy_v2');
         }
-        // Auto-generate Slabs and Pieces if transitioning to an active work order stage from quotation
-        const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
-        if (updateData.status && activeStatuses.includes(updateData.status) && updated.slabs.length === 0 && updated.quotations.length > 0) {
-            const existingSlabs = await index_1.prisma.slab.findMany({ where: { projectId: updated.id } });
-            const existingNames = new Set(existingSlabs.map(s => (s.name || '').trim().toLowerCase()));
-            const firstQuote = updated.quotations[0];
-            if (firstQuote && firstQuote.products) {
-                const products = firstQuote.products;
-                for (const prod of products) {
-                    const qty = Number(prod.qty) || 1;
-                    for (let i = 1; i <= qty; i++) {
-                        const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
-                        const normPieceName = pieceName.trim().toLowerCase();
-                        if (existingNames.has(normPieceName))
-                            continue;
-                        existingNames.add(normPieceName);
-                        const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
-                        await index_1.prisma.slab.create({
-                            data: {
-                                projectId: updated.id,
-                                name: pieceName,
-                                size: sizeStr,
-                                status: 'pending'
-                            }
-                        });
-                    }
+        else {
+            // Auto-generate Slabs if transitioning to an active work order stage from quotation
+            const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
+            if (updateData.status && activeStatuses.includes(updateData.status) && updated.slabs.length === 0 && updated.quotations.length > 0) {
+                const firstQuote = updated.quotations[0];
+                if (firstQuote && Array.isArray(firstQuote.products) && firstQuote.products.length > 0) {
+                    await (0, projectSync_1.syncSlabsAndQuotationFromProducts)(updated.id, firstQuote.products, {
+                        removeUnmatchedSlabs: false,
+                        updateQuotationRecord: true
+                    });
                 }
             }
         }
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('dashboard_summary');
+        (0, projectSync_1.invalidateProjectCaches)(String(id));
         res.json(updated);
     }
     catch (error) {

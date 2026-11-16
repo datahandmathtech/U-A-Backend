@@ -4,6 +4,7 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const fastCache_1 = require("../utils/fastCache");
+const projectSync_1 = require("../utils/projectSync");
 const router = (0, express_1.Router)();
 // Get all projects with slabs and pieces hierarchy for deduction selection
 router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res) => {
@@ -674,10 +675,9 @@ router.post('/bulk-create', authMiddleware_1.authenticate, async (req, res) => {
             });
             createdSlabs.push(created);
         }
-        // Invalidate caches
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        // Sync quotation products & invalidate caches
+        await (0, projectSync_1.syncQuotationFromSlabs)(String(projectId)).catch((e) => console.error('Error syncing quotation after bulk-create:', e));
+        (0, projectSync_1.invalidateProjectCaches)(String(projectId));
         res.status(201).json({ message: `Successfully created ${createdSlabs.length} slabs`, count: createdSlabs.length, slabs: createdSlabs });
     }
     catch (error) {
@@ -776,10 +776,9 @@ router.post('/replicate-template', authMiddleware_1.authenticate, async (req, re
             }
             updatedSlabIds.push(targetSlab.id);
         }
-        // 4. Invalidate caches
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        // 4. Sync quotation products & invalidate caches
+        await (0, projectSync_1.syncQuotationFromSlabs)(String(projectId)).catch((e) => console.error('Error syncing quotation after replicate-template:', e));
+        (0, projectSync_1.invalidateProjectCaches)(String(projectId));
         res.json({
             success: true,
             message: `Successfully replicated ${templatePieces.length} pieces and specs to ${updatedSlabIds.length} slab(s)`,
@@ -834,9 +833,8 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 pieces: pieces ? { create: pieces } : undefined
             }
         });
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        await (0, projectSync_1.syncQuotationFromSlabs)(String(projectId)).catch((e) => console.error('Error syncing quotation after slab create:', e));
+        (0, projectSync_1.invalidateProjectCaches)(String(projectId));
         res.status(201).json(newSlab);
     }
     catch (error) {
@@ -987,11 +985,10 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         catch (e) {
             console.error('Error syncing piece with updated slab:', e);
         }
-        // Invalidate caches
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        if (updatedSlab?.projectId) {
+            await (0, projectSync_1.syncQuotationFromSlabs)(String(updatedSlab.projectId)).catch((e) => console.error('Error syncing quotation after slab update:', e));
+        }
+        (0, projectSync_1.invalidateProjectCaches)(updatedSlab?.projectId ? String(updatedSlab.projectId) : undefined);
         res.json(updatedSlab);
     }
     catch (error) {
@@ -1013,9 +1010,7 @@ router.patch('/bulk-stages', authMiddleware_1.authenticate, async (req, res) => 
             where: { id: { in: slabIds.map(String) } },
             data: { requiredStages: cleanStages }
         });
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
+        (0, projectSync_1.invalidateProjectCaches)();
         res.json({ message: `Updated stages for ${slabIds.length} slabs`, count: slabIds.length });
     }
     catch (error) {
@@ -1031,6 +1026,11 @@ router.post('/bulk-delete', authMiddleware_1.authenticate, async (req, res) => {
             return res.status(400).json({ message: 'No slab IDs provided for deletion' });
         }
         const slabIds = ids.map(id => String(id));
+        const targetSlabs = await index_1.prisma.slab.findMany({
+            where: { id: { in: slabIds } },
+            select: { id: true, projectId: true }
+        });
+        const projectIds = Array.from(new Set(targetSlabs.map(s => s.projectId).filter(Boolean)));
         // Find all pieces under these slabs
         const pieces = await index_1.prisma.piece.findMany({ where: { slabId: { in: slabIds } } });
         const pieceIds = pieces.map(p => p.id);
@@ -1045,11 +1045,11 @@ router.post('/bulk-delete', authMiddleware_1.authenticate, async (req, res) => {
         await index_1.prisma.slab.deleteMany({
             where: { id: { in: slabIds } }
         }).catch(e => console.error(e));
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
-        fastCache_1.fastCache.invalidate('all_names_v2');
+        for (const projId of projectIds) {
+            await (0, projectSync_1.syncQuotationFromSlabs)(String(projId)).catch((e) => console.error('Error syncing quotation after bulk-delete:', e));
+            (0, projectSync_1.invalidateProjectCaches)(String(projId));
+        }
+        (0, projectSync_1.invalidateProjectCaches)();
         res.json({ message: `Successfully deleted ${slabIds.length} slabs`, count: slabIds.length });
     }
     catch (error) {
@@ -1061,6 +1061,10 @@ router.post('/bulk-delete', authMiddleware_1.authenticate, async (req, res) => {
 router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
+        const existingSlab = await index_1.prisma.slab.findUnique({
+            where: { id: String(id) },
+            select: { id: true, projectId: true }
+        });
         // Find all pieces
         const pieces = await index_1.prisma.piece.findMany({ where: { slabId: String(id) } });
         const pieceIds = pieces.map(p => p.id);
@@ -1075,11 +1079,13 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         await index_1.prisma.slab.deleteMany({
             where: { id: String(id) }
         }).catch(e => console.error(e));
-        fastCache_1.fastCache.invalidate('slabs_project_');
-        fastCache_1.fastCache.invalidate('all_projects');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v2');
-        fastCache_1.fastCache.invalidate('project_hierarchy_v3');
-        fastCache_1.fastCache.invalidate('all_names_v2');
+        if (existingSlab?.projectId) {
+            await (0, projectSync_1.syncQuotationFromSlabs)(String(existingSlab.projectId)).catch((e) => console.error('Error syncing quotation after slab delete:', e));
+            (0, projectSync_1.invalidateProjectCaches)(String(existingSlab.projectId));
+        }
+        else {
+            (0, projectSync_1.invalidateProjectCaches)();
+        }
         res.json({ message: 'Slab deleted successfully' });
     }
     catch (error) {

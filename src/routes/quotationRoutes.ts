@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import {
+  syncSlabsAndQuotationFromProducts,
+  ensureMergedProductsForProject,
+  invalidateProjectCaches
+} from '../utils/projectSync';
 
 const router = Router();
 
@@ -13,8 +18,23 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
 
     if (db) {
       try {
-        const rawQuotes = await db.collection('Quotation').find({ projectId: String(projectId) }).sort({ createdAt: -1 }).toArray();
-        return res.json(rawQuotes.map((q: any) => ({ ...q, id: q._id.toString() })));
+        const pObjId = mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : null;
+        const projQuery = pObjId
+          ? { $or: [{ projectId: String(projectId) }, { projectId: pObjId }] }
+          : { projectId: String(projectId) };
+
+        const [rawQuotes, rawSlabs] = await Promise.all([
+          db.collection('Quotation').find(projQuery).sort({ createdAt: -1 }).toArray(),
+          db.collection('Slab').find(projQuery).sort({ createdAt: 1 }).toArray()
+        ]);
+        const formattedQuotes = rawQuotes.map((q: any) => ({ ...q, id: q._id.toString() }));
+        const formattedSlabs = rawSlabs.map((s: any) => ({ ...s, id: s._id.toString() }));
+        const { quotations: mergedQuotes } = ensureMergedProductsForProject(
+          String(projectId),
+          formattedSlabs,
+          formattedQuotes
+        );
+        return res.json(mergedQuotes);
       } catch (mErr) {
         console.warn('Mongoose quotations fetch failed:', mErr);
       }
@@ -145,9 +165,26 @@ router.post('/', authenticate, async (req, res) => {
         terms: terms || [],
         globalCosts: globalCosts || {},
         status: 'draft'
+      },
+      include: {
+        project: true
       }
     });
-    
+
+    const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
+    if (
+      projectId &&
+      Array.isArray(products) &&
+      products.length > 0 &&
+      (newQuotation.project?.isDirectWorkOrder || (newQuotation.project?.status && activeStatuses.includes(newQuotation.project.status)))
+    ) {
+      await syncSlabsAndQuotationFromProducts(String(projectId), products, {
+        removeUnmatchedSlabs: false,
+        updateQuotationRecord: true
+      }).catch((e) => console.error('Sync slabs on quotation create error:', e));
+    }
+
+    invalidateProjectCaches(projectId ? String(projectId) : undefined);
     res.status(201).json(newQuotation);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating quotation' });
@@ -203,40 +240,18 @@ router.patch('/:id', authenticate, async (req: any, res: any) => {
       }
     });
 
-    // Auto-generate Slabs if project is already an active work order and has no slabs
+    // Always sync Slabs when quotation products are updated on an active or direct work order
     const activeStatuses = ['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'];
-    console.log('Quotation Update Check:', { 
-      status: updated.project?.status, 
-      isActive: updated.project?.status ? activeStatuses.includes(updated.project.status) : false,
-      slabsLength: updated.project?.slabs?.length,
-      hasProducts: !!updated.products
-    });
+    const isActiveOrDirect = updated.project?.isDirectWorkOrder || (updated.project?.status && activeStatuses.includes(updated.project.status));
 
-    if (updated.project?.status && activeStatuses.includes(updated.project.status) && updated.project.slabs.length === 0 && updated.products) {
-      console.log('Generating slabs...');
-      const existingSlabs = await prisma.slab.findMany({ where: { projectId: updated.projectId } });
-      const existingNames = new Set(existingSlabs.map(s => (s.name || '').trim().toLowerCase()));
-      const productsList = updated.products as any[];
-      for (const prod of productsList) {
-        const qty = Number(prod.qty) || 1;
-        for (let i = 1; i <= qty; i++) {
-          const pieceName = qty > 1 ? `${prod.category || 'Product'} ${i}` : (prod.category || 'Product');
-          const normPieceName = pieceName.trim().toLowerCase();
-          if (existingNames.has(normPieceName)) continue;
-          existingNames.add(normPieceName);
-          const sizeStr = `${prod.length || 0}L x ${prod.width || 0}W ${prod.breadth ? `| ${prod.breadth}MM` : ''}`;
-          await prisma.slab.create({
-            data: {
-              projectId: updated.projectId,
-              name: pieceName,
-              size: sizeStr,
-              status: 'pending'
-            }
-          });
-        }
-      }
+    if (isActiveOrDirect && Array.isArray(products)) {
+      await syncSlabsAndQuotationFromProducts(updated.projectId, products, {
+        removeUnmatchedSlabs: true,
+        updateQuotationRecord: true
+      }).catch((e) => console.error('Error syncing slabs from quotation update:', e));
     }
 
+    invalidateProjectCaches(updated.projectId);
     res.json(updated);
   } catch (error) {
     console.error(error);
