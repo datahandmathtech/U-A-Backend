@@ -550,26 +550,20 @@ router.get('/:id/materials', authMiddleware_1.authenticate, async (req, res) => 
                     }).toArray()
                     : [];
                 const pieceIds = projectPieces.map((p) => p._id.toString());
-                // Also find any InventoryLog entries referencing this project, its slabs, or its pieces
-                const projNameEsc = (projectDoc?.name || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Also find any InventoryLog entries referencing this project or its pieces
                 const logOrConditions = [
                     { remarks: { $regex: `\\[Project:${String(id)}\\]`, $options: 'i' } }
                 ];
-                if (projNameEsc.length >= 2) {
-                    logOrConditions.push({ remarks: { $regex: `(^|\\] )${projNameEsc}(\\s*\\(|$)`, $options: 'i' } });
-                }
                 if (pieceIds.length > 0) {
                     logOrConditions.push({ remarks: { $regex: `\\[Piece:(${pieceIds.join('|')})\\]`, $options: 'i' } });
                 }
                 const matchedLogsForProj = await db.collection('InventoryLog').find({ $or: logOrConditions }).toArray();
                 const logInvIds = matchedLogsForProj.map((l) => l.inventoryId?.toString()).filter(Boolean);
-                // Also find any Inventory items whose supplier matches the project's clientName or project name
+                // Also find any Inventory items whose supplier strictly matches the project's clientName (ONLY if clientName is distinct and not generic)
                 const supplierConditions = [];
-                if (projectDoc?.clientName && String(projectDoc.clientName).trim()) {
-                    supplierConditions.push({ supplier: new RegExp(`^${String(projectDoc.clientName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
-                }
-                if (projectDoc?.name && String(projectDoc.name).trim()) {
-                    supplierConditions.push({ supplier: new RegExp(`^${String(projectDoc.name).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+                const clientNameClean = (projectDoc?.clientName || '').trim();
+                if (clientNameClean && !['unnati arts', 'company', 'client', 'n/a', 'na'].includes(clientNameClean.toLowerCase())) {
+                    supplierConditions.push({ supplier: new RegExp(`^${clientNameClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
                 }
                 const supplierInvs = supplierConditions.length > 0
                     ? await db.collection('Inventory').find({ $or: supplierConditions }).toArray()
