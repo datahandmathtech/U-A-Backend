@@ -576,10 +576,41 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
           });
         });
 
+        const slabSizeMap = new Map<string, string>();
+        rawSlabs.forEach((s: any) => {
+          slabSizeMap.set(s._id.toString(), s.size || '');
+        });
+
         const pieceMap = new Map();
         rawPieces.forEach((p: any) => {
           const smId = p.sourceMaterialId?.toString();
           const pLogs = pieceLogMap.get(p._id.toString()) || [];
+          const parentSlabSize = slabSizeMap.get(p.slabId?.toString()) || '';
+          const parentSlabArea = parsePieceAreaSqFt(parentSlabSize);
+
+          let effectivePieceSize = p.size;
+          if (parentSlabArea > 0 && effectivePieceSize) {
+            const pArea = parsePieceAreaSqFt(effectivePieceSize);
+            if (pArea > parentSlabArea + 0.05) {
+              // Auto-heal piece whose unit was accidentally set to Feet inside an Inch/MM slab (e.g. 300 Sq.Ft inside 4.17 Sq.Ft slab)
+              const lMatch = String(effectivePieceSize).match(/(\d+(?:\.\d+)?)\s*L/i);
+              const wMatch = String(effectivePieceSize).match(/(\d+(?:\.\d+)?)\s*W/i);
+              const tMatch = String(effectivePieceSize).match(/\|\s*(\d+(?:\.\d+)?)\s*MM/i);
+              if (lMatch && wMatch) {
+                const lNum = parseFloat(lMatch[1] || '0');
+                const wNum = parseFloat(wMatch[1] || '0');
+                const parentLower = parentSlabSize.toLowerCase();
+                const isParentMM = parentLower.includes('mm') && !parentLower.includes('inch') && !parentLower.includes('feet');
+                const isParentFt = parentLower.includes('feet') || parentLower.includes('ft');
+                const repairedUnit = isParentMM ? 'MM' : (isParentFt ? 'Feet' : 'Inch');
+                const repairedArea = isParentMM ? ((lNum * wNum) / 92903.04) : (isParentFt ? (lNum * wNum) : ((lNum * wNum) / 144));
+                if (repairedArea <= parentSlabArea + 0.05) {
+                  effectivePieceSize = `${lNum}L x ${wNum}W ${repairedUnit}${tMatch ? ` | ${tMatch[1]}MM` : ''} (${repairedArea.toFixed(2)} Sq.Ft)`;
+                  db.collection('Piece').updateOne({ _id: p._id }, { $set: { size: effectivePieceSize } }).catch(() => {});
+                }
+              }
+            }
+          }
           
           let pieceStage = p.stage || 'Production';
           let pieceStatus = p.status || 'pending';
@@ -603,7 +634,7 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             id: p._id.toString(),
             pieceNumber: p.pieceNumber,
             productName: p.productName,
-            size: p.size,
+            size: effectivePieceSize,
             stage: pieceStage,
             status: pieceStatus,
             sourceMaterialId: smId || null,

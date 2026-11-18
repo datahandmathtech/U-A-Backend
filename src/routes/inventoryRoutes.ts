@@ -277,7 +277,7 @@ router.get('/item-logs/:inventoryId', authenticate, async (req, res) => {
         }
       }
     });
-    const logs = await prisma.inventoryLog.findMany({
+    const rawLogs = await prisma.inventoryLog.findMany({
       where: { inventoryId: String(inventoryId) },
       orderBy: { createdAt: 'asc' }, // Ascending to calculate balance easily
       include: {
@@ -286,6 +286,40 @@ router.get('/item-logs/:inventoryId', authenticate, async (req, res) => {
         }
       }
     });
+
+    // Deduplicate accidental duplicate OUT logs for the exact same [Piece:...] or identical remarks + quantity
+    const seenOutKeys = new Set<string>();
+    const logs: any[] = [];
+    let restoredQty = 0;
+    const duplicateIdsToDelete: string[] = [];
+
+    for (const l of rawLogs) {
+      if (l.type === 'OUT' && l.remarks) {
+        const pieceMatch = l.remarks.match(/\[Piece:([a-f\d]{24})\]/i);
+        const dedupKey = pieceMatch
+          ? `piece_${pieceMatch[1]}`
+          : `rem_${l.remarks.trim()}_${Number(l.quantity).toFixed(2)}`;
+        if (seenOutKeys.has(dedupKey)) {
+          duplicateIdsToDelete.push(l.id);
+          restoredQty += Number(l.quantity) || 0;
+          continue;
+        }
+        seenOutKeys.add(dedupKey);
+      }
+      logs.push(l);
+    }
+
+    if (duplicateIdsToDelete.length > 0 && item) {
+      await prisma.inventoryLog.deleteMany({ where: { id: { in: duplicateIdsToDelete } } }).catch(() => {});
+      const correctedQty = (item.quantity || 0) + restoredQty;
+      await prisma.inventory.update({
+        where: { id: item.id },
+        data: { quantity: correctedQty }
+      }).catch(() => {});
+      item.quantity = correctedQty;
+      fastCache.clearAll();
+    }
+
     res.json({ item, logs });
   } catch (error) {
     console.error('Error fetching item logs:', error);
@@ -482,17 +516,44 @@ router.post('/deduct', authenticate, async (req, res) => {
       }
     }
 
-    // Create OUT log for Used
+    // Create OUT log for Used (or update existing if already deducted for the same pieceId to prevent duplicates)
     if (used > 0) {
-      await prisma.inventoryLog.create({
-        data: {
-          inventoryId: inventoryId,
-          type: 'OUT',
-          quantity: used,
-          remarks: outRemarks,
-          createdAt: createdAt
-        }
-      });
+      const existingOutLog = pieceId
+        ? await prisma.inventoryLog.findFirst({
+            where: {
+              inventoryId: inventoryId,
+              type: 'OUT',
+              remarks: { contains: `[Piece:${pieceId}]` }
+            }
+          })
+        : null;
+
+      if (existingOutLog) {
+        // Restore previously deducted quantity and apply new used quantity
+        const diff = used - (existingOutLog.quantity || 0);
+        await prisma.inventory.update({
+          where: { id: inventoryId },
+          data: { quantity: item.quantity - diff }
+        });
+        await prisma.inventoryLog.update({
+          where: { id: existingOutLog.id },
+          data: {
+            quantity: used,
+            remarks: outRemarks,
+            createdAt: createdAt
+          }
+        });
+      } else {
+        await prisma.inventoryLog.create({
+          data: {
+            inventoryId: inventoryId,
+            type: 'OUT',
+            quantity: used,
+            remarks: outRemarks,
+            createdAt: createdAt
+          }
+        });
+      }
     }
 
     // Create OUT log for Waste
