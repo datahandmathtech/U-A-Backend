@@ -37,6 +37,39 @@ export const formatProductToSlabSize = (prod: any): string => {
   return `${l}L x ${w}W ${unitLabel}${t ? ` | ${t}MM` : ''} (${calcSqFt} Sq.Ft)`;
 };
 
+export const parsePieceAreaSqFt = (sizeStr?: string | null): number => {
+  if (!sizeStr) return 0;
+  const raw = String(sizeStr);
+  const explicitMatch = raw.match(/([\d.]+)\s*Sq\.?Ft/i);
+  if (explicitMatch && explicitMatch[1]) {
+    return parseFloat(explicitMatch[1]) || 0;
+  }
+  const dimsPart = (raw.split('|')[0] || '').toLowerCase();
+  const lMatch = raw.match(/(\d+(?:\.\d+)?)\s*L/i) || dimsPart.match(/(\d+(?:\.\d+)?)/);
+  const wMatch = raw.match(/(\d+(?:\.\d+)?)\s*W/i) || dimsPart.match(/[xX*×]\s*(\d+(?:\.\d+)?)/);
+  if (lMatch && lMatch[1] && wMatch && wMatch[1]) {
+    const l = parseFloat(lMatch[1]) || 0;
+    const w = parseFloat(wMatch[1]) || 0;
+    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
+      return l * w;
+    }
+    if (dimsPart.includes('mm')) {
+      return (l * w) / 92903.04;
+    }
+    return (l * w) / 144;
+  }
+  return 0;
+};
+
+export const calculateSlabExistingPiecesArea = (pieces?: any[]): number => {
+  if (!Array.isArray(pieces) || pieces.length === 0) return 0;
+  if (pieces.length === 1 && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
+    return 0;
+  }
+  const sum = pieces.reduce((acc, p) => acc + parsePieceAreaSqFt(p.size), 0);
+  return Math.round(sum * 100) / 100;
+};
+
 export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
   let l = Number(existingProduct?.length) || 0;
   let w = Number(existingProduct?.width) || 0;
@@ -67,7 +100,11 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
   const isMM = dimUnit === 'mm';
   const sqft = isFt ? l * w : (isMM ? (l * w) / 92903.04 : (l * w) / 144);
 
-  const unit = existingProduct?.unit || 'pieces';
+  const defaultUnitFromSlab = dimUnit === 'sq_ft' ? 'Sq. Ft' : dimUnit;
+  const existingU = (existingProduct?.unit || '').trim();
+  const unit = (existingU && existingU.toLowerCase() !== 'pieces' && existingU.toLowerCase() !== 'piece' && existingU.toLowerCase() !== 'pcs')
+    ? existingU
+    : defaultUnitFromSlab;
   const qty = 1;
   const rate = Number(existingProduct?.rate) || 0;
   const unitSafe = (unit || 'pieces').toLowerCase().trim();
@@ -218,6 +255,10 @@ export const syncSlabsAndQuotationFromProducts = async (
       }
 
       if (matched) {
+        const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
+        if (existingPiecesArea > 0 && normProd.sqft > 0 && normProd.sqft + 0.01 < existingPiecesArea) {
+          throw new Error(`Cannot reduce size of "${rawName}" to ${normProd.sqft.toFixed(2)} Sq.Ft because its inside pieces already total ${existingPiecesArea.toFixed(2)} Sq.Ft.`);
+        }
         matchedSlabIds.add(matched.id);
         await prisma.slab.update({
           where: { id: matched.id },
@@ -238,7 +279,7 @@ export const syncSlabsAndQuotationFromProducts = async (
             name: rawName,
             size: sizeFormatted,
             cost: 0,
-            requiredStages: ['Production', 'Polishing', 'Packing', 'Dispatch']
+            requiredStages: ['Production']
           }
         });
         matchedSlabIds.add(newSlab.id);
@@ -254,6 +295,11 @@ export const syncSlabsAndQuotationFromProducts = async (
           matched = currentSlabs.find(s => !matchedSlabIds.has(s.id) && (s.id === normProd.id || s.name.trim().toLowerCase() === rawName.toLowerCase()));
         }
         if (matched) {
+          const singleSlabSqFt = normProd.sqft / qty;
+          const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
+          if (existingPiecesArea > 0 && singleSlabSqFt > 0 && singleSlabSqFt + 0.01 < existingPiecesArea) {
+            throw new Error(`Cannot reduce size of "${pieceSlabName}" to ${singleSlabSqFt.toFixed(2)} Sq.Ft because its inside pieces already total ${existingPiecesArea.toFixed(2)} Sq.Ft.`);
+          }
           matchedSlabIds.add(matched.id);
           await prisma.slab.update({
             where: { id: matched.id },
@@ -266,7 +312,7 @@ export const syncSlabsAndQuotationFromProducts = async (
               name: pieceSlabName,
               size: sizeFormatted,
               cost: 0,
-              requiredStages: ['Production', 'Polishing', 'Packing', 'Dispatch']
+              requiredStages: ['Production']
             }
           });
           matchedSlabIds.add(newSlab.id);

@@ -2,7 +2,12 @@ import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
 import { fastCache } from '../utils/fastCache';
-import { syncQuotationFromSlabs, invalidateProjectCaches } from '../utils/projectSync';
+import {
+  syncQuotationFromSlabs,
+  invalidateProjectCaches,
+  parsePieceAreaSqFt,
+  calculateSlabExistingPiecesArea
+} from '../utils/projectSync';
 
 const router = Router();
 
@@ -601,6 +606,10 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
               }
             });
           }
+          const rawReqStages = Array.isArray(s.requiredStages) && s.requiredStages.length > 0
+            ? s.requiredStages.filter((st: string) => st !== 'Polishing')
+            : ['Production'];
+          const cleanReqStages = rawReqStages.length > 0 ? rawReqStages : ['Production'];
           return {
             id: s._id.toString(),
             projectId: s.projectId?.toString() || s.projectId,
@@ -610,7 +619,7 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             size: s.size,
             cost: s.cost,
             status: s.status,
-            requiredStages: s.requiredStages,
+            requiredStages: cleanReqStages,
             createdAt: s.createdAt,
             pieces: slabPieces
           };
@@ -736,7 +745,7 @@ router.post('/bulk-create', authenticate, async (req, res) => {
       const slabSize = item.size || null;
       const reqStages = item.requiredStages && Array.isArray(item.requiredStages) && item.requiredStages.length > 0
         ? item.requiredStages
-        : ['Production', 'Polishing', 'Packing', 'Dispatch'];
+        : ['Production'];
 
       let piecesToCreate: any[] = [];
       if (item.pieces && Array.isArray(item.pieces) && item.pieces.length > 0) {
@@ -945,7 +954,7 @@ router.post('/', authenticate, async (req, res) => {
         name,
         size,
         cost: Number(cost) || 0,
-        requiredStages: requiredStages || ['Production', 'Polishing', 'Packing', 'Dispatch'],
+        requiredStages: requiredStages || ['Production'],
         pieces: pieces ? { create: pieces } : undefined
       }
     });
@@ -1078,6 +1087,22 @@ router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, size, cost, requiredStages, status, inventoryId } = req.body;
+
+    if (size !== undefined) {
+      const existingSlabWithPieces = await prisma.slab.findUnique({
+        where: { id: String(id) },
+        include: { pieces: true }
+      });
+      if (existingSlabWithPieces) {
+        const existingPiecesArea = calculateSlabExistingPiecesArea(existingSlabWithPieces.pieces);
+        const newSlabArea = Math.round(parsePieceAreaSqFt(size) * 100) / 100;
+        if (existingPiecesArea > 0 && newSlabArea > 0 && newSlabArea + 0.01 < existingPiecesArea) {
+          return res.status(400).json({
+            message: `Cannot reduce slab size (${newSlabArea.toFixed(2)} Sq.Ft) below the total area of its existing ${existingSlabWithPieces.pieces.length} inside pieces (${existingPiecesArea.toFixed(2)} Sq.Ft).`
+          });
+        }
+      }
+    }
     
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
@@ -1102,8 +1127,8 @@ router.put('/:id', authenticate, async (req, res) => {
 
     // If size or name changed and there's 1 piece (full slab), sync piece specifications
     try {
-      const pieceCount = await prisma.piece.count({ where: { slabId: String(id) } });
-      if (pieceCount === 1) {
+      const pieces = await prisma.piece.findMany({ where: { slabId: String(id) } });
+      if (pieces.length === 1 && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
         const pieceUpdate: any = {};
         if (updateData.size) pieceUpdate.size = updateData.size;
         if (updateData.name) pieceUpdate.productName = `${updateData.name} 1.1 (Full Slab)`;

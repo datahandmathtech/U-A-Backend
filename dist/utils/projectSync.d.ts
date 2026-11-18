@@ -1,5 +1,7 @@
 export declare const invalidateProjectCaches: (projectId?: string) => void;
 export declare const formatProductToSlabSize: (prod: any) => string;
+export declare const parsePieceAreaSqFt: (sizeStr?: string | null) => number;
+export declare const calculateSlabExistingPiecesArea: (pieces?: any[]) => number;
 export declare const parseSlabToProduct: (slab: any, existingProduct?: any) => {
     photo?: any;
     id: any;
