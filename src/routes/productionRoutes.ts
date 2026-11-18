@@ -3,6 +3,7 @@ import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
 import { fastCache } from '../utils/fastCache';
 import { sanitizePhotos } from '../utils/cloudinaryHelper';
+import { parsePieceAreaSqFt } from '../utils/projectSync';
 
 const router = Router();
 
@@ -1282,7 +1283,8 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
     const createdLogs = [];
     const targetProjectId = projectId || pieces[0]?.slab?.projectId;
 
-    for (const [stg, slabGroups] of Object.entries(stageSlabMap)) {
+    for (const [rawStg, slabGroups] of Object.entries(stageSlabMap)) {
+      const stg = rawStg.startsWith('Polishing') ? 'Polishing' : (rawStg.startsWith('Bridge Cutting') ? 'Bridge Cutting' : rawStg);
       for (const [sId, groupPieces] of Object.entries(slabGroups)) {
         if (!groupPieces || groupPieces.length === 0) continue;
         const groupPieceIds = groupPieces.map(p => p.id);
@@ -1301,6 +1303,22 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
             stage: stg
           }
         });
+
+        // Remove any existing duplicate PieceLog / ProductionLog for these pieces at this stage
+        const stageVariants = [stg, `${stg} Work`, rawStg, `${rawStg} Work`];
+        await prisma.pieceLog.deleteMany({
+          where: {
+            pieceId: { in: groupPieceIds },
+            stage: { in: stageVariants }
+          }
+        }).catch(() => {});
+
+        await prisma.productionLog.deleteMany({
+          where: {
+            pieceIds: { hasSome: groupPieceIds },
+            stage: { in: stageVariants }
+          }
+        }).catch(() => {});
 
         // Create approved production log for audit and In/Out tracking
         try {
@@ -1757,7 +1775,10 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
       return res.status(404).json({ message: 'Slab not found' });
     }
 
-    const normalizedStage = String(stage || 'Production').replace(' Work', '').trim();
+    const rawStage = String(stage || 'Production').replace(' Work', '').trim();
+    const normalizedStage = rawStage.startsWith('Polishing')
+      ? 'Polishing'
+      : (rawStage.startsWith('Bridge Cutting') ? 'Bridge Cutting' : rawStage);
 
     // Determine target piece
     let piece: any = null;
@@ -1820,7 +1841,22 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
       stage: normalizedStage
     };
     if (req.body.productName) pieceUpdateData.productName = req.body.productName;
-    if (req.body.size) pieceUpdateData.size = req.body.size;
+    if (req.body.size) {
+      const slabArea = Math.round(parsePieceAreaSqFt(slab.size) * 100) / 100;
+      const newPieceArea = Math.round(parsePieceAreaSqFt(req.body.size) * 100) / 100;
+      const otherPiecesArea = Math.round(
+        (slab.pieces || [])
+          .filter((p: any) => p.id !== piece.id)
+          .reduce((acc: number, p: any) => acc + parsePieceAreaSqFt(p.size), 0) * 100
+      ) / 100;
+      const totalArea = Math.round((otherPiecesArea + newPieceArea) * 100) / 100;
+      if (slabArea > 0 && newPieceArea > 0 && totalArea > slabArea + 0.01) {
+        return res.status(400).json({
+          message: `Total piece area (${totalArea.toFixed(2)} Sq.Ft) exceeds allowed slab limit (${slabArea.toFixed(2)} Sq.Ft)!`
+        });
+      }
+      pieceUpdateData.size = req.body.size;
+    }
 
     // 1. Update piece status, name, size and stage
     const updatedPiece = await prisma.piece.update({
@@ -1972,43 +2008,106 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
         }).catch(() => {});
       }
 
-      // 2. Create PieceLog
-      pieceLog = await prisma.pieceLog.create({
-        data: {
+      // 2. Upsert single PieceLog for this piece + stage (never create duplicates)
+      const stageMatchList = normalizedStage === 'Polishing'
+        ? ['Polishing', 'Polishing - Honed', 'Polishing - Mirror', 'Polishing Work', 'Polishing - Honed Work', 'Polishing - Mirror Work']
+        : [normalizedStage, `${normalizedStage} Work`];
+
+      const existingPieceLogs = await prisma.pieceLog.findMany({
+        where: {
           pieceId: piece.id,
-          stage: normalizedStage,
-          status: 'approved',
-          machineId: machineId ? String(machineId) : undefined,
-          driverName: driverName ? String(driverName) : undefined,
-          operatorId: req.user?.id ? String(req.user.id) : undefined,
-          startPhotoUrl: photoUrl || undefined,
-          endPhotoUrl: photoUrl || undefined,
-          startTime: parsedStartTime,
-          endTime: parsedEndTime,
-          remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
-        }
+          stage: { in: stageMatchList }
+        },
+        orderBy: { createdAt: 'desc' }
       });
 
-      // 3. Create ProductionLog for traceability & In/Out Ledger
-      try {
-        await prisma.productionLog.create({
+      if (existingPieceLogs.length > 0) {
+        const primaryLog = existingPieceLogs[0]!;
+        if (existingPieceLogs.length > 1) {
+          const extraIds = existingPieceLogs.slice(1).map(l => l.id);
+          await prisma.pieceLog.deleteMany({ where: { id: { in: extraIds } } }).catch(() => {});
+        }
+        pieceLog = await prisma.pieceLog.update({
+          where: { id: primaryLog.id },
           data: {
-            projectId: slab.projectId,
-            slabId: slab.id,
-            productId: slab.id,
-            productName: `${slab.name} - Piece ${piece.pieceNumber}`,
-            pieceIds: [piece.id],
-            quantityProduced: 1,
-            stage: normalizedStage.includes('Work') ? normalizedStage : `${normalizedStage} Work`,
-            transactionType: 'IN',
-            approvalStatus: 'approved',
-            startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
-            machineId: machineId ? String(machineId) : undefined,
-            workerId: req.user?.id ? String(req.user.id) : undefined,
-            parentLogId: machineLogRecord?.id,
-            remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+            stage: normalizedStage,
+            status: 'approved',
+            machineId: machineId ? String(machineId) : primaryLog.machineId,
+            driverName: driverName ? String(driverName) : primaryLog.driverName,
+            operatorId: req.user?.id ? String(req.user.id) : primaryLog.operatorId,
+            startPhotoUrl: photoUrl || primaryLog.startPhotoUrl || undefined,
+            endPhotoUrl: photoUrl || primaryLog.endPhotoUrl || undefined,
+            startTime: parsedStartTime,
+            endTime: parsedEndTime,
+            remarks: remarks || primaryLog.remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
           }
         });
+      } else {
+        pieceLog = await prisma.pieceLog.create({
+          data: {
+            pieceId: piece.id,
+            stage: normalizedStage,
+            status: 'approved',
+            machineId: machineId ? String(machineId) : undefined,
+            driverName: driverName ? String(driverName) : undefined,
+            operatorId: req.user?.id ? String(req.user.id) : undefined,
+            startPhotoUrl: photoUrl || undefined,
+            endPhotoUrl: photoUrl || undefined,
+            startTime: parsedStartTime,
+            endTime: parsedEndTime,
+            remarks: remarks || (driverName ? `Completed by Driver: ${driverName}` : `Quick Completed for ${normalizedStage}`)
+          }
+        });
+      }
+
+      // 3. Upsert single ProductionLog for traceability & In/Out Ledger (never create duplicates)
+      try {
+        const existingProdLogs = await prisma.productionLog.findMany({
+          where: {
+            pieceIds: { has: piece.id },
+            stage: { in: stageMatchList }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        if (existingProdLogs.length > 0) {
+          const primaryProdLog = existingProdLogs[0]!;
+          if (existingProdLogs.length > 1) {
+            const extraProdIds = existingProdLogs.slice(1).map(l => l.id);
+            await prisma.productionLog.deleteMany({ where: { id: { in: extraProdIds } } }).catch(() => {});
+          }
+          await prisma.productionLog.update({
+            where: { id: primaryProdLog.id },
+            data: {
+              stage: `${normalizedStage} Work`,
+              approvalStatus: 'approved',
+              startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : (primaryProdLog.startPhotos as any) || undefined,
+              machineId: machineId ? String(machineId) : primaryProdLog.machineId,
+              workerId: req.user?.id ? String(req.user.id) : primaryProdLog.workerId,
+              parentLogId: machineLogRecord?.id || primaryProdLog.parentLogId,
+              remarks: remarks || primaryProdLog.remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+            }
+          });
+        } else {
+          await prisma.productionLog.create({
+            data: {
+              projectId: slab.projectId,
+              slabId: slab.id,
+              productId: slab.id,
+              productName: `${slab.name} - Piece ${piece.pieceNumber}`,
+              pieceIds: [piece.id],
+              quantityProduced: 1,
+              stage: `${normalizedStage} Work`,
+              transactionType: 'IN',
+              approvalStatus: 'approved',
+              startPhotos: photoUrl ? { unit: photoUrl, machine: photoUrl } : undefined,
+              machineId: machineId ? String(machineId) : undefined,
+              workerId: req.user?.id ? String(req.user.id) : undefined,
+              parentLogId: machineLogRecord?.id,
+              remarks: remarks || (driverName ? `Driver: ${driverName}` : `Quick Direct Complete: ${normalizedStage}`)
+            }
+          });
+        }
       } catch (logErr) {
         console.warn('ProductionLog creation warning:', logErr);
       }

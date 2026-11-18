@@ -458,8 +458,15 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
         }).sort({ createdAt: -1 }).toArray();
 
         const pieceLogMap = new Map();
+        const seenPieceStageKey = new Set<string>();
+        const duplicatePieceLogIds: any[] = [];
         rawPieceLogs.forEach((l: any) => {
           const pk = l.pieceId?.toString();
+          if (!pk) return;
+          const rawStg = String(l.stage || 'Production').replace(' Work', '').trim();
+          const normStage = rawStg.startsWith('Polishing') ? 'Polishing' : (rawStg.startsWith('Bridge Cutting') ? 'Bridge Cutting' : rawStg);
+          const dedupKey = `${pk}__${normStage.toLowerCase()}`;
+
           if (!pieceLogMap.has(pk)) pieceLogMap.set(pk, []);
           let effectiveEndTime = l.endTime || l.createdAt || null;
           let effectiveStartTime = l.startTime || null;
@@ -471,9 +478,26 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             effectiveStartTime = l.createdAt;
             db.collection('PieceLog').updateOne({ _id: l._id }, { $set: { startTime: l.createdAt } }).catch(() => {});
           }
+
+          if (seenPieceStageKey.has(dedupKey)) {
+            const existingEntry = pieceLogMap.get(pk).find((x: any) => x.stage === normStage);
+            if (existingEntry) {
+              if (!existingEntry.endPhotoUrl && (l.endPhotoUrl || l.startPhotoUrl)) {
+                existingEntry.endPhotoUrl = l.endPhotoUrl || l.startPhotoUrl;
+                existingEntry.startPhotoUrl = l.startPhotoUrl || l.endPhotoUrl;
+              }
+              if (!existingEntry.machineId && l.machineId) {
+                existingEntry.machineId = l.machineId.toString();
+              }
+            }
+            duplicatePieceLogIds.push(l._id);
+            return;
+          }
+          seenPieceStageKey.add(dedupKey);
+
           pieceLogMap.get(pk).push({
             id: l._id.toString(),
-            stage: l.stage,
+            stage: normStage,
             status: l.status,
             machineId: l.machineId?.toString() || null,
             driverName: l.driverName || null,
@@ -485,6 +509,9 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
             createdAt: l.createdAt
           });
         });
+        if (duplicatePieceLogIds.length > 0) {
+          db.collection('PieceLog').deleteMany({ _id: { $in: duplicatePieceLogIds } }).catch(() => {});
+        }
 
         const sourceMatIds = rawPieces.map((p: any) => p.sourceMaterialId).filter(Boolean);
         const sourceMatObjIds = sourceMatIds
@@ -1321,6 +1348,29 @@ router.delete('/:id', authenticate, async (req, res) => {
 router.put('/piece/:id', authenticate, async (req, res) => {
   try {
     const { vendorName, vendorId, size, status, productName, stage } = req.body;
+
+    if (size !== undefined) {
+      const targetPiece = await prisma.piece.findUnique({
+        where: { id: String(req.params.id) },
+        include: { slab: { include: { pieces: true } } }
+      });
+      if (targetPiece?.slab) {
+        const slabArea = Math.round(parsePieceAreaSqFt(targetPiece.slab.size) * 100) / 100;
+        const newPieceArea = Math.round(parsePieceAreaSqFt(size) * 100) / 100;
+        const otherPiecesArea = Math.round(
+          (targetPiece.slab.pieces || [])
+            .filter((p: any) => p.id !== targetPiece.id)
+            .reduce((acc: number, p: any) => acc + parsePieceAreaSqFt(p.size), 0) * 100
+        ) / 100;
+        const totalArea = Math.round((otherPiecesArea + newPieceArea) * 100) / 100;
+        if (slabArea > 0 && totalArea > slabArea + 0.01) {
+          return res.status(400).json({
+            message: `Total piece area (${totalArea.toFixed(2)} Sq.Ft) exceeds allowed slab limit (${slabArea.toFixed(2)} Sq.Ft)!`
+          });
+        }
+      }
+    }
+
     const pieceData: any = {};
     if (vendorName !== undefined) pieceData.vendorName = vendorName;
     if (vendorId !== undefined) {
