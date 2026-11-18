@@ -667,6 +667,23 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                             }
                         });
                     }
+                    // Auto-heal slab whose size is MM but either missing unit or erroneously labeled Inch
+                    const lMatch = (s.size || '').match(/([\d.]+)\s*L/i);
+                    const wMatch = (s.size || '').match(/([\d.]+)\s*W/i);
+                    const tMatch = (s.size || '').match(/\|\s*([\d.]+)\s*MM/i) || (s.size || '').match(/([\d.]+)\s*MM/i);
+                    if (lMatch && wMatch) {
+                        const lVal = parseFloat(lMatch[1] || '0');
+                        const wVal = parseFloat(wMatch[1] || '0');
+                        const tVal = tMatch ? tMatch[1] : '18';
+                        if (lVal > 150 || wVal > 150) {
+                            const mmSqFt = ((lVal * wVal) / 92903.04).toFixed(2);
+                            const properSize = `${lVal}L x ${wVal}W MM | ${tVal}MM (${mmSqFt} Sq.Ft)`;
+                            if (s.size !== properSize) {
+                                s.size = properSize;
+                                db.collection('Slab').updateOne({ _id: s._id }, { $set: { size: properSize } }).catch(() => { });
+                            }
+                        }
+                    }
                     const rawReqStages = Array.isArray(s.requiredStages) && s.requiredStages.length > 0
                         ? s.requiredStages.filter((st) => st !== 'Polishing')
                         : ['Production'];
@@ -685,19 +702,18 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                         pieces: slabPieces
                     };
                 });
-                // Deduplicate slabs by normalized name to guarantee unique items
-                const seenNames = new Set();
-                const uniqueSlabs = slabs.filter((s) => {
+                // Disambiguate slabs with duplicate names instead of dropping them
+                const seenNames = new Map();
+                slabs.forEach((s) => {
                     const norm = (s.name || '').trim().toLowerCase();
-                    if (!norm)
-                        return true;
-                    if (seenNames.has(norm))
-                        return false;
-                    seenNames.add(norm);
-                    return true;
+                    const count = seenNames.get(norm) || 0;
+                    seenNames.set(norm, count + 1);
+                    if (count > 0) {
+                        s.name = `${s.name} (${count + 1})`;
+                    }
                 });
-                fastCache_1.fastCache.set(cacheKey, uniqueSlabs, 30);
-                return res.json(uniqueSlabs);
+                fastCache_1.fastCache.set(cacheKey, slabs, 30);
+                return res.json(slabs);
             }
             catch (err) {
                 console.warn('Mongoose slab query failed, falling back to Prisma:', err);
@@ -733,16 +749,16 @@ router.get('/project/:projectId', authMiddleware_1.authenticate, async (req, res
                 }
             }
         });
-        const seenPrismaNames = new Set();
-        const uniquePrismaSlabs = prismaSlabs.filter((s) => {
+        const seenPrismaNames = new Map();
+        prismaSlabs.forEach((s) => {
             const norm = (s.name || '').trim().toLowerCase();
-            if (!norm)
-                return true;
-            if (seenPrismaNames.has(norm))
-                return false;
-            seenPrismaNames.add(norm);
-            return true;
+            const count = seenPrismaNames.get(norm) || 0;
+            seenPrismaNames.set(norm, count + 1);
+            if (count > 0) {
+                s.name = `${s.name} (${count + 1})`;
+            }
         });
+        const uniquePrismaSlabs = prismaSlabs;
         uniquePrismaSlabs.forEach((s) => {
             const slabIsFeet = /\bfeet\b/i.test((s.size || '').split('|')[0] || '');
             if (Array.isArray(s.pieces)) {

@@ -40,20 +40,27 @@ export const formatProductToSlabSize = (prod: any): string => {
 export const parsePieceAreaSqFt = (sizeStr?: string | null): number => {
   if (!sizeStr) return 0;
   const raw = String(sizeStr);
-  const explicitMatch = raw.match(/([\d.]+)\s*Sq\.?Ft/i);
-  if (explicitMatch && explicitMatch[1]) {
-    return parseFloat(explicitMatch[1]) || 0;
-  }
   const dimsPart = (raw.split('|')[0] || '').toLowerCase();
   const lMatch = raw.match(/(\d+(?:\.\d+)?)\s*L/i) || dimsPart.match(/(\d+(?:\.\d+)?)/);
   const wMatch = raw.match(/(\d+(?:\.\d+)?)\s*W/i) || dimsPart.match(/[xX*×]\s*(\d+(?:\.\d+)?)/);
-  if (lMatch && lMatch[1] && wMatch && wMatch[1]) {
-    const l = parseFloat(lMatch[1]) || 0;
-    const w = parseFloat(wMatch[1]) || 0;
+  const l = (lMatch && lMatch[1]) ? parseFloat(lMatch[1]) : 0;
+  const w = (wMatch && wMatch[1]) ? parseFloat(wMatch[1]) : 0;
+  const isLargeMM = l > 150 || w > 150;
+
+  const explicitMatch = raw.match(/([\d.]+)\s*Sq\.?Ft/i);
+  if (explicitMatch && explicitMatch[1]) {
+    const val = parseFloat(explicitMatch[1]) || 0;
+    if (isLargeMM && val > 500) {
+      return Math.round(((l * w) / 92903.04) * 100) / 100;
+    }
+    return val;
+  }
+
+  if (l > 0 && w > 0) {
     if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
       return l * w;
     }
-    if (dimsPart.includes('mm')) {
+    if (dimsPart.includes('mm') || isLargeMM) {
       return (l * w) / 92903.04;
     }
     return (l * w) / 144;
@@ -87,11 +94,13 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
     if (wMatch && wMatch[1]) w = parseFloat(wMatch[1]) || 0;
     if (tMatch && tMatch[1]) breadth = parseFloat(tMatch[1]) || 0;
 
-    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
+    const isLargeMM = l > 150 || w > 150;
+    const existingDimUnit = (existingProduct?.dimensionUnit || existingProduct?.unit || '').toLowerCase();
+    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft') || existingDimUnit.includes('feet') || existingDimUnit.includes('ft') || existingDimUnit.includes('sq')) {
       dimUnit = 'sq_ft';
-    } else if (dimsPart.includes('mm')) {
+    } else if (dimsPart.includes('mm') || isLargeMM || existingDimUnit === 'mm' || existingDimUnit.includes('milli')) {
       dimUnit = 'mm';
-    } else if (dimsPart.includes('inch') || dimsPart.includes('"')) {
+    } else if (dimsPart.includes('inch') || dimsPart.includes('"') || existingDimUnit.includes('inch')) {
       dimUnit = 'inch';
     }
   }
@@ -295,7 +304,7 @@ export const syncSlabsAndQuotationFromProducts = async (
           matched = currentSlabs.find(s => !matchedSlabIds.has(s.id) && (s.id === normProd.id || s.name.trim().toLowerCase() === rawName.toLowerCase()));
         }
         if (matched) {
-          const singleSlabSqFt = normProd.sqft / qty;
+          const singleSlabSqFt = normProd.sqft; // normProd.sqft is already the single piece area
           const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
           if (existingPiecesArea > 0 && singleSlabSqFt > 0 && singleSlabSqFt + 0.01 < existingPiecesArea) {
             throw new Error(`Cannot reduce size of "${pieceSlabName}" to ${singleSlabSqFt.toFixed(2)} Sq.Ft because its inside pieces already total ${existingPiecesArea.toFixed(2)} Sq.Ft.`);
