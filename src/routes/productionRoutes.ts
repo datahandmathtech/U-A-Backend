@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
 import { fastCache } from '../utils/fastCache';
-import { sanitizePhotos } from '../utils/cloudinaryHelper';
+import { sanitizePhotos, uploadBase64ToCloudinary } from '../utils/cloudinaryHelper';
 import { parsePieceAreaSqFt } from '../utils/projectSync';
 
 const router = Router();
@@ -554,6 +554,27 @@ router.post('/material-log', authenticate, async (req, res) => {
 
     startPhotos = await sanitizePhotos(startPhotos);
 
+    let directPhotoUrl = req.body.photoUrl;
+    if (directPhotoUrl && typeof directPhotoUrl === 'string' && directPhotoUrl.startsWith('data:image/')) {
+      directPhotoUrl = await uploadBase64ToCloudinary(directPhotoUrl);
+    }
+    const resolvedPhoto = directPhotoUrl || (typeof startPhotos === 'object' ? (startPhotos.machine || startPhotos.unit || startPhotos.software) : startPhotos) || undefined;
+
+    const computeEffectiveCreatedAt = (dateInput?: any) => {
+      const now = new Date();
+      if (!dateInput) return now;
+      const chosen = new Date(dateInput);
+      if (isNaN(chosen.getTime())) return now;
+      const isToday = chosen.getFullYear() === now.getFullYear() &&
+                      chosen.getMonth() === now.getMonth() &&
+                      chosen.getDate() === now.getDate();
+      if (isToday) {
+        return now;
+      }
+      chosen.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+      return chosen;
+    };
+
     let projectId: string | undefined = undefined;
     if (parentLogId && toValidObjectId(parentLogId)) {
       const parentLog = await prisma.productionLog.findUnique({
@@ -623,7 +644,8 @@ router.post('/material-log', authenticate, async (req, res) => {
             status: 'completed',
             isReturned: false,
             returnedQty: 0,
-            ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
+            createdAt: computeEffectiveCreatedAt(req.body.date),
+            ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
           }
         });
 
@@ -669,7 +691,8 @@ router.post('/material-log', authenticate, async (req, res) => {
         status: 'completed',
         isReturned: false,
         returnedQty: 0,
-        ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
+        createdAt: computeEffectiveCreatedAt(req.body.date),
+        ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
       }
     });
 

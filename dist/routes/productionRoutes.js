@@ -513,6 +513,27 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
             transactionType = 'IN';
         }
         startPhotos = await (0, cloudinaryHelper_1.sanitizePhotos)(startPhotos);
+        let directPhotoUrl = req.body.photoUrl;
+        if (directPhotoUrl && typeof directPhotoUrl === 'string' && directPhotoUrl.startsWith('data:image/')) {
+            directPhotoUrl = await (0, cloudinaryHelper_1.uploadBase64ToCloudinary)(directPhotoUrl);
+        }
+        const resolvedPhoto = directPhotoUrl || (typeof startPhotos === 'object' ? (startPhotos.machine || startPhotos.unit || startPhotos.software) : startPhotos) || undefined;
+        const computeEffectiveCreatedAt = (dateInput) => {
+            const now = new Date();
+            if (!dateInput)
+                return now;
+            const chosen = new Date(dateInput);
+            if (isNaN(chosen.getTime()))
+                return now;
+            const isToday = chosen.getFullYear() === now.getFullYear() &&
+                chosen.getMonth() === now.getMonth() &&
+                chosen.getDate() === now.getDate();
+            if (isToday) {
+                return now;
+            }
+            chosen.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+            return chosen;
+        };
         let projectId = undefined;
         if (parentLogId && toValidObjectId(parentLogId)) {
             const parentLog = await index_1.prisma.productionLog.findUnique({
@@ -588,7 +609,8 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                         status: 'completed',
                         isReturned: false,
                         returnedQty: 0,
-                        ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
+                        createdAt: computeEffectiveCreatedAt(req.body.date),
+                        ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
                     }
                 });
                 if (transactionType === 'IN' && itemParentLogId) {
@@ -629,7 +651,8 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                 status: 'completed',
                 isReturned: false,
                 returnedQty: 0,
-                ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
+                createdAt: computeEffectiveCreatedAt(req.body.date),
+                ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
             }
         });
         // If log is auto-approved (e.g. direct Dispatch), automatically update pieces

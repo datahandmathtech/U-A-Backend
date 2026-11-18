@@ -16,6 +16,10 @@ const invalidateProjectCaches = (projectId) => {
 };
 exports.invalidateProjectCaches = invalidateProjectCaches;
 const formatProductToSlabSize = (prod) => {
+    const l = parseFloat(prod.length) || 0;
+    const w = parseFloat(prod.width) || 0;
+    const t = parseFloat(prod.breadth ?? prod.thickness) || 0;
+    const isLargeMM = l > 150 || w > 150;
     const u = (prod.unit || 'pieces').toLowerCase().trim();
     const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
     let isFt = false;
@@ -23,16 +27,13 @@ const formatProductToSlabSize = (prod) => {
     if (isPieces) {
         const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
         isFt = dimU === 'sq_ft' || dimU === 'sqft' || dimU === 'feet' || dimU === 'ft';
-        isMM = dimU === 'mm';
+        isMM = dimU === 'mm' || isLargeMM;
     }
     else {
         isFt = u === 'sq_ft' || u === 'sqft' || u === 'sq. ft' || u === 'sq ft' || u.includes('feet') || u.includes('sq') || u.includes('ft') || u.includes('rft');
-        isMM = u === 'mm' || u.includes('millimeter');
+        isMM = u === 'mm' || u.includes('millimeter') || isLargeMM;
     }
     const unitLabel = isFt ? 'Feet' : (isMM ? 'MM' : 'Inch');
-    const l = parseFloat(prod.length) || 0;
-    const w = parseFloat(prod.width) || 0;
-    const t = parseFloat(prod.breadth ?? prod.thickness) || 0;
     if (l <= 0 && w <= 0 && prod.size) {
         return String(prod.size);
     }

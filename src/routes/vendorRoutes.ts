@@ -182,7 +182,7 @@ router.get('/:id/ledger', async (req, res) => {
         const rawLogs = await db.collection('ProductionLog').find({
           $or: queryOr,
           createdAt: { $gte: startOfFY, $lte: endOfFY }
-        }).sort({ createdAt: 1 }).toArray();
+        }).sort({ createdAt: 1, _id: 1 }).toArray();
 
         const projectIds = rawLogs.map((l: any) => l.projectId).filter(Boolean);
         const projects = await db.collection('Project').find({
@@ -193,12 +193,27 @@ router.get('/:id/ledger', async (req, res) => {
           projectMap.set(p._id.toString(), p.name);
         });
 
-        logs = rawLogs.map((l: any) => ({
-          ...l,
-          id: l._id.toString(),
-          project: l.projectId ? { name: projectMap.get(l.projectId.toString()) || '' } : undefined,
-          createdAt: new Date(l.createdAt)
-        }));
+        logs = rawLogs.map((l: any) => {
+          let createdTime = new Date(l.createdAt);
+          if (createdTime.getUTCHours() === 0 && createdTime.getUTCMinutes() === 0 && createdTime.getUTCSeconds() === 0 && l._id) {
+            try {
+              const oidTime = new Date(parseInt(l._id.toString().substring(0, 8), 16) * 1000);
+              if (!isNaN(oidTime.getTime()) && oidTime.getFullYear() > 2020) {
+                createdTime = oidTime;
+              }
+            } catch (e) {}
+          }
+          const photoUrl = l.photoUrl || l.startPhotoUrl || l.startPhotos?.machine || l.startPhotos?.unit || l.startPhotos?.software || '';
+          return {
+            ...l,
+            id: l._id.toString(),
+            project: l.projectId ? { name: projectMap.get(l.projectId.toString()) || '' } : undefined,
+            createdAt: createdTime,
+            photoUrl
+          };
+        });
+        // Strict chronological sort by exact time and ObjectId
+        logs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() || String(a.id).localeCompare(String(b.id)));
         dbSuccess = true;
       } catch (mErr) {
         console.warn('Mongoose vendor ledger fetch failed:', mErr);
@@ -211,7 +226,7 @@ router.get('/:id/ledger', async (req, res) => {
           vendorId: id,
           createdAt: { gte: startOfFY, lte: endOfFY }
         },
-        orderBy: { createdAt: 'asc' }, // Ascending for running balance
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         include: {
           project: { select: { name: true } }
         }
@@ -226,10 +241,13 @@ router.get('/:id/ledger', async (req, res) => {
       
       runningBalance = runningBalance + piecesOut - piecesIn; // +Out -In
 
+      const photoUrl = log.photoUrl || (log as any).startPhotoUrl || (log as any).startPhotos?.machine || (log as any).startPhotos?.unit || (log as any).startPhotos?.software || '';
+
       return {
         ...log,
         id: log.id,
         date: log.createdAt,
+        createdAt: log.createdAt,
         narration: `${isOut ? 'OUT' : 'IN'} - ${log.stage || 'General'} - ${log.productName || 'Product'}`,
         stage: log.stage,
         vehicleNumber: log.vehicleNumber || '-',
@@ -237,7 +255,8 @@ router.get('/:id/ledger', async (req, res) => {
         piecesIn,
         balance: runningBalance,
         transactionType: log.transactionType,
-        rawLog: log
+        photoUrl,
+        rawLog: { ...log, photoUrl }
       };
     });
 
