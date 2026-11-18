@@ -647,6 +647,73 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
           pieceMap.get(sKey).push(pObj);
         });
 
+        // Changes 1 & 2: Auto-create 1 inside piece for any single slab that has 0 pieces
+        for (const s of rawSlabs) {
+          const sKey = s._id.toString();
+          const existingPieces = pieceMap.get(sKey) || [];
+          if (existingPieces.length === 0) {
+            const isSlabCompleted = s.status === 'completed' || s.status === 'approved';
+            const newPieceId = new mongoose.Types.ObjectId();
+            const pieceName = `${s.name || 'Slab'}.1`;
+            const nowDate = new Date();
+            const newPieceDoc = {
+              _id: newPieceId,
+              slabId: s._id,
+              pieceNumber: 1,
+              productName: pieceName,
+              size: s.size || '',
+              stage: 'Production',
+              status: isSlabCompleted ? 'completed' : 'pending',
+              createdAt: s.createdAt || nowDate,
+              updatedAt: nowDate
+            };
+            await db.collection('Piece').insertOne(newPieceDoc).catch(() => {});
+
+            const autoLogs: any[] = [];
+            if (isSlabCompleted) {
+              const reqStages = Array.isArray(s.requiredStages) && s.requiredStages.length > 0
+                ? s.requiredStages.filter((st: string) => st !== 'Polishing' && st !== 'Packing' && st !== 'Dispatch')
+                : ['Production'];
+              const stagesToLog = reqStages.length > 0 ? reqStages : ['Production'];
+              for (const stg of stagesToLog) {
+                const normStg = stg.startsWith('Polishing') ? 'Polishing' : stg;
+                const newLogId = new mongoose.Types.ObjectId();
+                const logDoc = {
+                  _id: newLogId,
+                  pieceId: newPieceId,
+                  stage: normStg,
+                  status: 'approved',
+                  remarks: 'Auto-synced from Single Slab Approval',
+                  endTime: nowDate,
+                  createdAt: nowDate,
+                  updatedAt: nowDate
+                };
+                await db.collection('PieceLog').insertOne(logDoc).catch(() => {});
+                autoLogs.push({
+                  id: newLogId.toString(),
+                  stage: normStg,
+                  status: 'approved',
+                  remarks: 'Auto-synced from Single Slab Approval',
+                  createdAt: nowDate
+                });
+              }
+            }
+
+            pieceMap.set(sKey, [{
+              id: newPieceId.toString(),
+              pieceNumber: 1,
+              productName: pieceName,
+              size: s.size || '',
+              stage: 'Production',
+              status: isSlabCompleted ? 'completed' : 'pending',
+              sourceMaterialId: null,
+              vendorName: null,
+              sourceMaterial: null,
+              logs: autoLogs
+            }]);
+          }
+        }
+
         slabs = rawSlabs.map((s: any) => {
           const slabInvKey = s.inventoryId?.toString();
           const slabPieces = pieceMap.get(s._id.toString()) || [];

@@ -622,7 +622,8 @@ router.post('/material-log', authenticate, async (req, res) => {
             approvalStatus: (req.body.source === 'admin_manual' || itemStage === 'Dispatch') ? 'approved' : 'pending',
             status: 'completed',
             isReturned: false,
-            returnedQty: 0
+            returnedQty: 0,
+            ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
           }
         });
 
@@ -634,6 +635,14 @@ router.post('/material-log', authenticate, async (req, res) => {
 
         return created;
       }));
+
+      fastCache.invalidate('prod_');
+      fastCache.invalidate('all_projects');
+      fastCache.invalidate('slabs_project_');
+      fastCache.invalidate('project_hierarchy_v2');
+      fastCache.invalidate('vendors_stats');
+      fastCache.invalidate('vendor_ledger_');
+
       return res.status(201).json(newLogs);
     }
 
@@ -659,7 +668,8 @@ router.post('/material-log', authenticate, async (req, res) => {
         approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
         status: 'completed',
         isReturned: false,
-        returnedQty: 0
+        returnedQty: 0,
+        ...(req.body.date ? { createdAt: new Date(req.body.date) } : {})
       }
     });
 
@@ -1252,6 +1262,33 @@ router.post('/manual-approve-pieces', authenticate, async (req: any, res: any) =
       return res.status(400).json({ message: 'No piece approvals provided' });
     }
 
+    // Auto-create 1st inside piece for any virtual slab ID (__SLAB__<slabId>) where slab had 0 pieces
+    for (const item of approvalList) {
+      if (item.pieceId.startsWith('__SLAB__')) {
+        const targetSlabId = item.pieceId.replace('__SLAB__', '').trim();
+        const existingSlab = await prisma.slab.findUnique({
+          where: { id: targetSlabId },
+          include: { pieces: true }
+        });
+        if (existingSlab) {
+          let firstPiece = existingSlab.pieces?.[0];
+          if (!firstPiece) {
+            firstPiece = await prisma.piece.create({
+              data: {
+                slabId: existingSlab.id,
+                pieceNumber: 1,
+                productName: `${existingSlab.name || 'Slab'}.1`,
+                size: existingSlab.size || '',
+                stage: 'Production',
+                status: 'pending'
+              }
+            });
+          }
+          item.pieceId = firstPiece.id;
+        }
+      }
+    }
+
     const uniquePieceIds = Array.from(new Set(approvalList.map(a => a.pieceId)));
 
     // 1. Fetch pieces to get details
@@ -1788,7 +1825,8 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
         data: {
           slabId: slab.id,
           pieceNumber: currentMax + 1,
-          productName: `${slab.name} Piece ${currentMax + 1}`,
+          productName: `${slab.name}.${currentMax + 1}`,
+          size: slab.size || '',
           status: 'completed',
           stage: normalizedStage
         }
@@ -1803,7 +1841,8 @@ router.post('/quick-complete-piece', authenticate, async (req: any, res: any) =>
           data: {
             slabId: slab.id,
             pieceNumber: 1,
-            productName: `${slab.name} Piece 1`,
+            productName: `${slab.name}.1`,
+            size: slab.size || '',
             status: 'completed',
             stage: normalizedStage
           }

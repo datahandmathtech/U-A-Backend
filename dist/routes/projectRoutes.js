@@ -511,7 +511,7 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
         res.status(500).json({ message: error.message || 'Server error deleting project' });
     }
 });
-// Get materials reserved for project
+// Get materials reserved for project (including Inventory items linked via Slabs, Client/Supplier name, or InventoryLog deductions)
 router.get('/:id/materials', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
@@ -520,33 +520,151 @@ router.get('/:id/materials', authMiddleware_1.authenticate, async (req, res) => 
         if (db) {
             try {
                 const pObjId = mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : null;
+                const projectDoc = await db.collection('Project').findOne({
+                    $or: [
+                        ...(pObjId ? [{ _id: pObjId }] : []),
+                        { _id: String(id) },
+                        { id: String(id) }
+                    ]
+                });
                 const rawMaterials = await db.collection('ProjectMaterial').find({
                     $or: [
                         { projectId: String(id) },
                         ...(pObjId ? [{ projectId: pObjId }] : [])
                     ]
                 }).sort({ addedAt: -1 }).toArray();
-                const invIds = rawMaterials.map((m) => m.inventoryId).filter(Boolean);
-                const invObjIds = invIds.filter((invId) => mongoose.Types.ObjectId.isValid(invId)).map((invId) => new mongoose.Types.ObjectId(invId));
-                const rawInvs = await db.collection('Inventory').find({
+                const projectSlabs = await db.collection('Slab').find({
                     $or: [
-                        { _id: { $in: invObjIds } },
-                        { id: { $in: invIds } }
+                        { projectId: String(id) },
+                        ...(pObjId ? [{ projectId: pObjId }] : [])
                     ]
                 }).toArray();
+                const slabInvIds = projectSlabs.map((s) => s.inventoryId?.toString()).filter(Boolean);
+                const slabIds = projectSlabs.map((s) => s._id.toString());
+                const projectPieces = slabIds.length > 0
+                    ? await db.collection('Piece').find({
+                        $or: [
+                            { slabId: { $in: slabIds } },
+                            { slabId: { $in: slabIds.filter((sId) => mongoose.Types.ObjectId.isValid(sId)).map((sId) => new mongoose.Types.ObjectId(sId)) } }
+                        ]
+                    }).toArray()
+                    : [];
+                const pieceIds = projectPieces.map((p) => p._id.toString());
+                // Also find any InventoryLog entries referencing this project, its slabs, or its pieces
+                const projNameEsc = (projectDoc?.name || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const logOrConditions = [
+                    { remarks: { $regex: `\\[Project:${String(id)}\\]`, $options: 'i' } }
+                ];
+                if (projNameEsc.length >= 2) {
+                    logOrConditions.push({ remarks: { $regex: `(^|\\] )${projNameEsc}(\\s*\\(|$)`, $options: 'i' } });
+                }
+                if (pieceIds.length > 0) {
+                    logOrConditions.push({ remarks: { $regex: `\\[Piece:(${pieceIds.join('|')})\\]`, $options: 'i' } });
+                }
+                const matchedLogsForProj = await db.collection('InventoryLog').find({ $or: logOrConditions }).toArray();
+                const logInvIds = matchedLogsForProj.map((l) => l.inventoryId?.toString()).filter(Boolean);
+                // Also find any Inventory items whose supplier matches the project's clientName or project name
+                const supplierConditions = [];
+                if (projectDoc?.clientName && String(projectDoc.clientName).trim()) {
+                    supplierConditions.push({ supplier: new RegExp(`^${String(projectDoc.clientName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+                }
+                if (projectDoc?.name && String(projectDoc.name).trim()) {
+                    supplierConditions.push({ supplier: new RegExp(`^${String(projectDoc.name).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+                }
+                const supplierInvs = supplierConditions.length > 0
+                    ? await db.collection('Inventory').find({ $or: supplierConditions }).toArray()
+                    : [];
+                const supplierInvIds = supplierInvs.map((inv) => inv._id.toString());
+                const pmInvIds = rawMaterials.map((m) => m.inventoryId?.toString()).filter(Boolean);
+                const allInvIdStrings = Array.from(new Set([...pmInvIds, ...slabInvIds, ...logInvIds, ...supplierInvIds]));
+                const allInvObjIds = allInvIdStrings
+                    .filter((invId) => mongoose.Types.ObjectId.isValid(invId))
+                    .map((invId) => new mongoose.Types.ObjectId(invId));
+                const rawInvs = allInvIdStrings.length > 0
+                    ? await db.collection('Inventory').find({
+                        $or: [
+                            { _id: { $in: allInvObjIds } },
+                            { id: { $in: allInvIdStrings } }
+                        ]
+                    }).toArray()
+                    : [];
+                // Fetch all InventoryLogs for these inventory items to compute Procure (+), Used (-), and Balance
+                const allItemLogs = allInvIdStrings.length > 0
+                    ? await db.collection('InventoryLog').find({
+                        $or: [
+                            { inventoryId: { $in: allInvObjIds } },
+                            { inventoryId: { $in: allInvIdStrings } }
+                        ]
+                    }).sort({ createdAt: 1 }).toArray()
+                    : [];
+                const itemLogMap = new Map();
+                allItemLogs.forEach((l) => {
+                    const k = l.inventoryId?.toString();
+                    if (!k)
+                        return;
+                    if (!itemLogMap.has(k))
+                        itemLogMap.set(k, []);
+                    itemLogMap.get(k).push({ ...l, id: l._id.toString() });
+                });
                 const invMap = new Map();
-                rawInvs.forEach((inv) => invMap.set(inv._id.toString(), { ...inv, id: inv._id.toString() }));
-                const enriched = rawMaterials.map((m) => ({
-                    id: m._id.toString(),
-                    projectId: m.projectId ? m.projectId.toString() : String(id),
-                    inventoryId: m.inventoryId ? m.inventoryId.toString() : null,
-                    quantity: m.quantity,
-                    cost: m.cost,
-                    addedAt: m.addedAt,
-                    createdAt: m.createdAt,
-                    updatedAt: m.updatedAt,
-                    inventory: m.inventoryId ? (invMap.get(m.inventoryId.toString()) || null) : null
-                }));
+                rawInvs.forEach((inv) => {
+                    const invKey = inv._id.toString();
+                    const iLogs = itemLogMap.get(invKey) || [];
+                    const procure = iLogs.filter((l) => l.type === 'IN').reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+                    const used = iLogs.filter((l) => l.type === 'OUT').reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+                    const effectiveProcure = procure > 0 ? procure : (Number(inv.quantity || 0) + used);
+                    invMap.set(invKey, {
+                        ...inv,
+                        id: invKey,
+                        procure: effectiveProcure,
+                        used,
+                        balance: Number(inv.quantity || 0),
+                        logs: iLogs
+                    });
+                });
+                const seenInvIds = new Set();
+                const enriched = [];
+                rawMaterials.forEach((m) => {
+                    const invKey = m.inventoryId ? m.inventoryId.toString() : null;
+                    const invObj = invKey ? (invMap.get(invKey) || null) : null;
+                    if (!invObj)
+                        return;
+                    if (invKey)
+                        seenInvIds.add(invKey);
+                    enriched.push({
+                        id: m._id.toString(),
+                        projectId: m.projectId ? m.projectId.toString() : String(id),
+                        inventoryId: invKey,
+                        quantity: invObj.procure || m.quantity,
+                        procure: invObj.procure,
+                        used: invObj.used,
+                        balance: invObj.balance,
+                        cost: m.cost,
+                        addedAt: m.addedAt || invObj.createdAt,
+                        createdAt: m.createdAt || invObj.createdAt,
+                        updatedAt: m.updatedAt,
+                        inventory: invObj
+                    });
+                });
+                // Append any linked Inventory items that did not have an explicit ProjectMaterial row yet
+                invMap.forEach((invObj, invKey) => {
+                    if (seenInvIds.has(invKey))
+                        return;
+                    seenInvIds.add(invKey);
+                    enriched.push({
+                        id: `inv_${invKey}`,
+                        projectId: String(id),
+                        inventoryId: invKey,
+                        quantity: invObj.procure || invObj.balance,
+                        procure: invObj.procure,
+                        used: invObj.used,
+                        balance: invObj.balance,
+                        cost: 0,
+                        addedAt: invObj.createdAt,
+                        createdAt: invObj.createdAt,
+                        inventory: invObj
+                    });
+                });
                 return res.json(enriched);
             }
             catch (mErr) {
@@ -593,12 +711,22 @@ router.post('/:id/materials', authMiddleware_1.authenticate, async (req, res) =>
 router.delete('/:id/materials/:materialId', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { materialId } = req.params;
-        const pm = await index_1.prisma.projectMaterial.findUnique({ where: { id: String(materialId) } });
+        const rawMatId = String(materialId);
+        if (rawMatId.startsWith('inv_')) {
+            const invId = rawMatId.replace('inv_', '');
+            await index_1.prisma.$transaction([
+                index_1.prisma.projectMaterial.deleteMany({ where: { inventoryId: invId } }),
+                index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } }),
+                index_1.prisma.inventory.delete({ where: { id: invId } })
+            ]);
+            return res.json({ message: 'Inventory and logs deleted' });
+        }
+        const pm = await index_1.prisma.projectMaterial.findUnique({ where: { id: rawMatId } });
         if (!pm)
             return res.status(404).json({ message: 'Material reservation not found' });
         const invId = pm.inventoryId;
         await index_1.prisma.$transaction([
-            index_1.prisma.projectMaterial.delete({ where: { id: String(materialId) } }),
+            index_1.prisma.projectMaterial.delete({ where: { id: rawMatId } }),
             index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } }),
             index_1.prisma.inventory.delete({ where: { id: invId } })
         ]);
