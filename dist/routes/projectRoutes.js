@@ -706,24 +706,76 @@ router.delete('/:id/materials/:materialId', authMiddleware_1.authenticate, async
     try {
         const { materialId } = req.params;
         const rawMatId = String(materialId);
+        const mongoose = require('mongoose');
+        const db = mongoose.connection?.db;
+        if (db) {
+            try {
+                const isInvPrefix = rawMatId.startsWith('inv_');
+                const cleanId = isInvPrefix ? rawMatId.replace('inv_', '') : rawMatId;
+                const cleanObjId = mongoose.Types.ObjectId.isValid(cleanId) ? new mongoose.Types.ObjectId(cleanId) : null;
+                let invIdToDel = isInvPrefix ? cleanId : null;
+                if (!isInvPrefix) {
+                    const pmDoc = await db.collection('ProjectMaterial').findOne({
+                        $or: [
+                            ...(cleanObjId ? [{ _id: cleanObjId }] : []),
+                            { _id: cleanId },
+                            { id: cleanId }
+                        ]
+                    });
+                    if (pmDoc?.inventoryId) {
+                        invIdToDel = pmDoc.inventoryId.toString();
+                    }
+                    // Delete ProjectMaterial
+                    await db.collection('ProjectMaterial').deleteMany({
+                        $or: [
+                            ...(cleanObjId ? [{ _id: cleanObjId }] : []),
+                            { _id: cleanId },
+                            { id: cleanId }
+                        ]
+                    });
+                }
+                if (invIdToDel) {
+                    const invObjId = mongoose.Types.ObjectId.isValid(invIdToDel) ? new mongoose.Types.ObjectId(invIdToDel) : null;
+                    await db.collection('ProjectMaterial').deleteMany({
+                        $or: [
+                            ...(invObjId ? [{ inventoryId: invObjId }] : []),
+                            { inventoryId: invIdToDel }
+                        ]
+                    });
+                    await db.collection('InventoryLog').deleteMany({
+                        $or: [
+                            ...(invObjId ? [{ inventoryId: invObjId }] : []),
+                            { inventoryId: invIdToDel }
+                        ]
+                    });
+                    await db.collection('Inventory').deleteMany({
+                        $or: [
+                            ...(invObjId ? [{ _id: invObjId }] : []),
+                            { _id: invIdToDel },
+                            { id: invIdToDel }
+                        ]
+                    });
+                }
+                return res.json({ message: 'Material reservation and associated inventory deleted successfully' });
+            }
+            catch (mErr) {
+                console.warn('Mongoose material delete fallback:', mErr);
+            }
+        }
         if (rawMatId.startsWith('inv_')) {
             const invId = rawMatId.replace('inv_', '');
-            await index_1.prisma.$transaction([
-                index_1.prisma.projectMaterial.deleteMany({ where: { inventoryId: invId } }),
-                index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } }),
-                index_1.prisma.inventory.delete({ where: { id: invId } })
-            ]);
+            await index_1.prisma.projectMaterial.deleteMany({ where: { inventoryId: invId } });
+            await index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } });
+            await index_1.prisma.inventory.deleteMany({ where: { id: invId } });
             return res.json({ message: 'Inventory and logs deleted' });
         }
         const pm = await index_1.prisma.projectMaterial.findUnique({ where: { id: rawMatId } });
-        if (!pm)
-            return res.status(404).json({ message: 'Material reservation not found' });
-        const invId = pm.inventoryId;
-        await index_1.prisma.$transaction([
-            index_1.prisma.projectMaterial.delete({ where: { id: rawMatId } }),
-            index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } }),
-            index_1.prisma.inventory.delete({ where: { id: invId } })
-        ]);
+        const invId = pm?.inventoryId;
+        await index_1.prisma.projectMaterial.deleteMany({ where: { id: rawMatId } });
+        if (invId) {
+            await index_1.prisma.inventoryLog.deleteMany({ where: { inventoryId: invId } });
+            await index_1.prisma.inventory.deleteMany({ where: { id: invId } });
+        }
         res.json({ message: 'Material reservation and associated inventory deleted' });
     }
     catch (error) {
