@@ -1338,7 +1338,7 @@ router.delete('/:id', authMiddleware_1.authenticate, async (req, res) => {
 // Update a Piece
 router.put('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { vendorName, vendorId, size, status, productName, stage } = req.body;
+        const { vendorName, vendorId, size, status, productName, stage, sourceMaterialId } = req.body;
         if (size !== undefined) {
             const targetPiece = await index_1.prisma.piece.findUnique({
                 where: { id: String(req.params.id) },
@@ -1361,6 +1361,8 @@ router.put('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
         const pieceData = {};
         if (vendorName !== undefined)
             pieceData.vendorName = vendorName;
+        if (sourceMaterialId !== undefined)
+            pieceData.sourceMaterialId = sourceMaterialId || null;
         if (vendorId !== undefined) {
             pieceData.vendorId = (vendorId && typeof vendorId === 'string' && vendorId.length === 24) ? vendorId : null;
         }
@@ -1417,6 +1419,25 @@ router.put('/piece/:id', authMiddleware_1.authenticate, async (req, res) => {
     }
     catch (error) {
         res.status(500).json({ message: 'Server error updating piece' });
+    }
+});
+// Unlink raw block from piece
+router.post('/piece/:id/unlink-raw-block', authMiddleware_1.authenticate, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updatedPiece = await index_1.prisma.piece.update({
+            where: { id: String(id) },
+            data: {
+                sourceMaterialId: null,
+                vendorName: null
+            }
+        });
+        fastCache_1.fastCache.clearAll();
+        res.json({ success: true, piece: updatedPiece });
+    }
+    catch (error) {
+        console.error('Error unlinking raw block:', error);
+        res.status(500).json({ message: 'Server error unlinking raw block' });
     }
 });
 // Delete a Piece

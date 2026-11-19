@@ -54,6 +54,7 @@ model Project {
   description        String?
   status             String    @default("enquiry") // enquiry, design_sharing, design_finalized, quotation, advance_payment, work_order, completed
   isDirectWorkOrder  Boolean   @default(false)
+  hasChatRoom        Boolean?  @default(true)
   startDate          DateTime?
   deadline           DateTime?
   progressPercentage Float     @default(0)
@@ -425,6 +426,8 @@ model MachineLog {
   project             Project?  @relation(fields: [projectId], references: [id])
   productId           String?
   productName         String?
+  clientName          String?
+  slabName            String?
   startTime           DateTime
   endTime             DateTime?
   estimatedHours      Float?    @default(0) // hours

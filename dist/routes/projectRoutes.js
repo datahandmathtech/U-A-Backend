@@ -271,7 +271,7 @@ router.get('/:id', authMiddleware_1.authenticate, async (req, res) => {
 });
 router.post('/', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { name, description, status, startDate, deadline, assignedToId, clientName, clientContact, clientEmail, enquirySource, location, requirements, createdAt, customerPhoto, totalPieces, completedPieces, deliveryDate, clientHandle, isDirectWorkOrder } = req.body;
+        const { name, description, status, startDate, deadline, assignedToId, clientName, clientContact, clientEmail, enquirySource, location, requirements, createdAt, customerPhoto, totalPieces, completedPieces, deliveryDate, clientHandle, isDirectWorkOrder, hasChatRoom } = req.body;
         // Auto-generate project ID (e.g. U-A-01, U-A-13) safely in a single scan
         const allProjects = await index_1.prisma.project.findMany({
             select: { projectId: true }
@@ -302,6 +302,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 createdAt: createdAt ? new Date(createdAt) : new Date(),
                 status: status || 'enquiry',
                 isDirectWorkOrder: isDirectWorkOrder || false,
+                hasChatRoom: hasChatRoom !== undefined ? Boolean(hasChatRoom) : true,
                 startDate: startDate ? new Date(startDate) : new Date(),
                 deadline: deadline ? new Date(deadline) : null,
                 assignedToId: (assignedToId && typeof assignedToId === 'string' && assignedToId.length === 24) ? assignedToId : undefined,
@@ -368,7 +369,7 @@ router.patch('/:id', authMiddleware_1.authenticate, async (req, res) => {
         delete rawData.updatedAt;
         const updateData = {};
         const allowedKeys = [
-            'name', 'description', 'status', 'isDirectWorkOrder', 'startDate', 'deadline',
+            'name', 'description', 'status', 'isDirectWorkOrder', 'hasChatRoom', 'startDate', 'deadline',
             'progressPercentage', 'assignedToId', 'totalPieces', 'completedPieces',
             'deliveryDate', 'clientHandle', 'clientName', 'clientContact', 'clientEmail',
             'customerPhoto', 'enquirySource', 'location', 'requirements', 'designFiles',
@@ -704,7 +705,7 @@ router.post('/:id/materials', authMiddleware_1.authenticate, async (req, res) =>
 // Delete reserved material from project
 router.delete('/:id/materials/:materialId', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { materialId } = req.params;
+        const { id, materialId } = req.params;
         const rawMatId = String(materialId);
         const mongoose = require('mongoose');
         const db = mongoose.connection?.db;
@@ -755,6 +756,34 @@ router.delete('/:id/materials/:materialId', authMiddleware_1.authenticate, async
                             { id: invIdToDel }
                         ]
                     });
+                }
+                // Unlink raw block from pieces in this project
+                try {
+                    const projSlabs = await index_1.prisma.slab.findMany({
+                        where: { projectId: String(id) },
+                        select: { id: true }
+                    });
+                    const slabIds = projSlabs.map(s => s.id);
+                    if (slabIds.length > 0) {
+                        const pieceMatch = [
+                            ...(cleanId ? [{ sourceMaterialId: cleanId }] : []),
+                            ...(invIdToDel ? [{ sourceMaterialId: invIdToDel }] : []),
+                            { sourceMaterialId: rawMatId }
+                        ];
+                        await index_1.prisma.piece.updateMany({
+                            where: {
+                                slabId: { in: slabIds },
+                                OR: pieceMatch
+                            },
+                            data: {
+                                sourceMaterialId: null,
+                                vendorName: null
+                            }
+                        });
+                    }
+                }
+                catch (unlinkErr) {
+                    console.error('Error unlinking pieces on material deletion:', unlinkErr);
                 }
                 return res.json({ message: 'Material reservation and associated inventory deleted successfully' });
             }

@@ -647,6 +647,38 @@ router.delete('/logs/:id', authenticate, async (req, res) => {
           data: { quantity: inventory.quantity + log.quantity }
         });
 
+        // Clear piece allocation if no remaining OUT logs or if piece was linked
+        try {
+          const linkedProjMats = await prisma.projectMaterial.findMany({
+            where: { inventoryId: log.inventoryId },
+            select: { id: true, projectId: true }
+          });
+          const projMatIds = linkedProjMats.map(pm => pm.id);
+          const remainingOutLogs = await prisma.inventoryLog.count({
+            where: {
+              inventoryId: log.inventoryId,
+              type: 'OUT',
+              id: { not: id }
+            }
+          });
+          if (remainingOutLogs === 0 && (projMatIds.length > 0 || log.inventoryId)) {
+            await prisma.piece.updateMany({
+              where: {
+                OR: [
+                  ...(projMatIds.length > 0 ? [{ sourceMaterialId: { in: projMatIds } }] : []),
+                  { sourceMaterialId: log.inventoryId }
+                ]
+              },
+              data: {
+                sourceMaterialId: null,
+                vendorName: null
+              }
+            });
+          }
+        } catch (unlinkProjErr) {
+          console.error('Error clearing piece allocation on inventory log delete:', unlinkProjErr);
+        }
+
         // 1. Unlink piece if log remarks contained piece or slab info
         if (log.remarks) {
           const idMatch = log.remarks.match(/\[Piece:([a-f\d]{24})\]/i);

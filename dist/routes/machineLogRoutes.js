@@ -176,7 +176,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 // Machine Clock-In (One-Step workflow for worker)
 router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours, operatorId: customOperatorId, startTime: customStartTime } = req.body;
+        const { machineId, machinePhotoUrl, unitPhotoUrl, softwarePhotoUrl, remarks, projectId, productId, productName, estimatedHours, operatorId: customOperatorId, startTime: customStartTime, clientName, slabName } = req.body;
         const operatorId = customOperatorId || req.user?.id;
         const startTime = customStartTime ? new Date(customStartTime) : new Date();
         const [cleanMachinePhoto, cleanUnitPhoto, cleanSoftwarePhoto] = await Promise.all([
@@ -196,7 +196,9 @@ router.post('/clock-in', authMiddleware_1.authenticate, async (req, res) => {
                 operatorId,
                 projectId,
                 productId,
-                productName,
+                productName: productName || slabName || (clientName ? `${clientName} Slab` : undefined),
+                clientName: clientName || undefined,
+                slabName: slabName || undefined,
                 status: 'active',
                 approvalStatus: 'in_progress',
                 isCarryForward: false
