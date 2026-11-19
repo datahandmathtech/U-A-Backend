@@ -506,7 +506,7 @@ const toValidObjectId = (val) => {
 };
 router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => {
     try {
-        let { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds, requiresMachine } = req.body;
+        let { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds, requiresMachine, remarks } = req.body;
         // If manager submits an OUT log but says no machine required, 
         // it skips the worker and acts as a direct piece completion (IN log)
         if (transactionType === 'OUT' && requiresMachine === false) {
@@ -609,8 +609,9 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                         status: 'completed',
                         isReturned: false,
                         returnedQty: 0,
+                        remarks: v.remarks?.trim() || remarks?.trim() || undefined,
                         createdAt: computeEffectiveCreatedAt(req.body.date),
-                        ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
+                        photoUrl: resolvedPhoto || undefined
                     }
                 });
                 if (transactionType === 'IN' && itemParentLogId) {
@@ -651,8 +652,9 @@ router.post('/material-log', authMiddleware_1.authenticate, async (req, res) => 
                 status: 'completed',
                 isReturned: false,
                 returnedQty: 0,
+                remarks: remarks?.trim() || undefined,
                 createdAt: computeEffectiveCreatedAt(req.body.date),
-                ...(resolvedPhoto ? { photoUrl: resolvedPhoto } : {})
+                photoUrl: resolvedPhoto || undefined
             }
         });
         // If log is auto-approved (e.g. direct Dispatch), automatically update pieces
