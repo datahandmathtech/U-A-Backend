@@ -83,6 +83,8 @@ const vendorRoutes_1 = __importDefault(require("./routes/vendorRoutes"));
 const wasteRoutes_1 = __importDefault(require("./routes/wasteRoutes"));
 const packingRoutes_1 = __importDefault(require("./routes/packingRoutes"));
 const productChatRoutes_1 = __importDefault(require("./routes/productChatRoutes"));
+const cashBookRoutes_1 = __importDefault(require("./routes/cashBookRoutes"));
+const maintenanceRoutes_1 = __importDefault(require("./routes/maintenanceRoutes"));
 // TCP/TLS Test route for Hostinger Support
 app.get('/api/test-tcp', (req, res) => {
     const tls = require('tls');
@@ -156,6 +158,8 @@ const mountRoutes = (prefix = '') => {
     app.use(`${prefix}/waste`, wasteRoutes_1.default);
     app.use([`${prefix}/packing-items`, `${prefix}/packing_items`], packingRoutes_1.default);
     app.use([`${prefix}/product-chat`, `${prefix}/product_chat`], productChatRoutes_1.default);
+    app.use([`${prefix}/cash-book`, `${prefix}/cash_book`], cashBookRoutes_1.default);
+    app.use([`${prefix}/maintenance`, `${prefix}/machine-maintenance`], maintenanceRoutes_1.default);
 };
 mountRoutes('/api');
 // Debug Mongo Route

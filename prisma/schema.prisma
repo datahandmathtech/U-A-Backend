@@ -32,6 +32,8 @@ model User {
   machineLogs    MachineLog[]
   expenses       Expense[]
   pieceLogs      PieceLog[]
+  cashTransactions    CashTransaction[]
+  machineMaintenances MachineMaintenance[]
 
   @@index([name])
 }
@@ -294,6 +296,7 @@ model Machine {
   machineLogs    MachineLog[]
   attendances    Attendance[]
   pieceLogs      PieceLog[]
+  maintenances   MachineMaintenance[]
 }
 
 model ProductionLog {
@@ -647,4 +650,55 @@ model ProductMessage {
   @@index([projectId])
   @@index([isReadByAdmin])
   @@index([createdAt])
+}
+
+model CashTransaction {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  type               String   // IN (+), OUT (-)
+  amount             Float
+  category           String   // Client Advance / Payment, Bank Withdrawal, Capital, Machine Maintenance & Parts, Consumables, Labor / Staff Advance, Tea / Snacks, Transport / Freight, Utilities, Vendor Payment, Bank Deposit, Miscellaneous
+  description        String?
+  paidToReceivedFrom String?  // Party / Client / Vendor / Staff name
+  paymentMode        String   @default("Cash") // Cash, Galla, Driver Cash
+  voucherNumber      String?
+  receiptPhoto       String?  // Cloudinary URL
+  date               DateTime @default(now())
+  sourceModule       String?  // manual, maintenance, client_payment, staff_advance, vendor_ledger
+  sourceId           String?  // Reference ID if synced
+  createdById        String?  @db.ObjectId
+  createdBy          User?    @relation(fields: [createdById], references: [id])
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([date])
+  @@index([type])
+}
+
+model MachineMaintenance {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  machineId         String    @db.ObjectId
+  machine           Machine   @relation(fields: [machineId], references: [id])
+  category          String    // CNC Tooling & Cutters, Spindle & Motor Repairs, Water & Slurry System, Pneumatics & Air Compressor, Electrical & CNC Controller, Mechanical & Guide Rails, Lubrication & Oil Servicing, Vacuum Table & Fixtures, Diamond Blades & Wire, Structure, Bed & Table, Preventive Regular Servicing, Emergency Breakdown
+  workDescription   String
+  partsReplaced     String?
+  vendorName        String?   // Garage / Workshop / Technician Name
+  technicianName    String?
+  billNumber        String?
+  billPhoto         String?   // Cloudinary URL of bill
+  amount            Float
+  paymentStatus     String    @default("Paid") // Paid, Due
+  paymentMode       String?   @default("Cash") // Cash, Bank, UPI
+  serviceDate       DateTime  @default(now())
+  nextServiceDate   DateTime?
+  nextServiceHours  Float?
+  notes             String?
+  cashTransactionId String?   // If linked to Cash Book
+  createdById       String?   @db.ObjectId
+  createdBy         User?     @relation(fields: [createdById], references: [id])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([machineId])
+  @@index([serviceDate])
+  @@index([paymentStatus])
 }
