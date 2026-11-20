@@ -1020,10 +1020,19 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
 router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const { count, productName, vendorName, size, piecesArray } = req.body;
+        const { count, productName, vendorName, size, piecesArray, replaceExisting } = req.body;
         const slab = await index_1.prisma.slab.findUnique({ where: { id: String(id) }, include: { pieces: true } });
         if (!slab)
             return res.status(404).json({ message: 'Slab not found' });
+        // If replaceExisting is true (e.g. Breaking full slab into pieces), clean up previous unstarted full slab piece(s)
+        if (replaceExisting) {
+            const unstartedPieces = (slab.pieces || []).filter((p) => !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started');
+            if (unstartedPieces.length > 0) {
+                const unstartedIds = unstartedPieces.map((p) => p.id);
+                await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: unstartedIds } } }).catch(() => { });
+                await index_1.prisma.piece.deleteMany({ where: { id: { in: unstartedIds } } }).catch(() => { });
+            }
+        }
         let projectMaterial = null;
         let usedQuantity = 0;
         // Auto-match source material
@@ -1040,8 +1049,11 @@ router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
                 matched = projectMaterials[0];
             projectMaterial = matched;
         }
-        const currentMaxPieceNumber = slab.pieces?.length > 0
-            ? Math.max(...slab.pieces.map((p) => p.pieceNumber))
+        const remainingPieces = replaceExisting
+            ? await index_1.prisma.piece.findMany({ where: { slabId: String(id) } })
+            : (slab.pieces || []);
+        const currentMaxPieceNumber = remainingPieces.length > 0
+            ? Math.max(...remainingPieces.map((p) => p.pieceNumber || 0))
             : 0;
         const piecesData = [];
         if (piecesArray && Array.isArray(piecesArray)) {

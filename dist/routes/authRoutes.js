@@ -147,6 +147,8 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
         console.log('Login attempt for:', emailOrStaffId);
         const cleanInput = (emailOrStaffId || '').trim();
         const lowerInput = cleanInput.toLowerCase();
+        const escapedInput = cleanInput.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const inputRegex = new RegExp(`^${escapedInput}$`, 'i');
         let user = null;
         // 1. Direct High-Speed MongoDB Lookup First
         try {
@@ -155,10 +157,13 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
             if (db) {
                 const rawUser = await db.collection('User').findOne({
                     $or: [
-                        { email: cleanInput },
-                        { email: lowerInput },
+                        { staffId: inputRegex },
+                        { email: inputRegex },
+                        { name: inputRegex },
                         { staffId: cleanInput },
                         { staffId: lowerInput },
+                        { email: cleanInput },
+                        { email: lowerInput },
                         { name: cleanInput },
                         ...(lowerInput === 'admin' ? [{ email: 'admin@unnati.com' }] : [])
                     ]
@@ -181,23 +186,21 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
         // 2. Prisma Fallback if Mongoose query did not find user
         if (!user) {
             try {
-                user = await Promise.race([
-                    index_1.prisma.user.findFirst({
-                        where: {
-                            OR: [
-                                { email: cleanInput },
-                                { email: lowerInput },
-                                { staffId: cleanInput },
-                                { staffId: lowerInput },
-                                { name: cleanInput }
-                            ]
-                        }
-                    }),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma query timeout')), 2000))
-                ]);
+                user = await index_1.prisma.user.findFirst({
+                    where: {
+                        OR: [
+                            { staffId: { equals: cleanInput, mode: 'insensitive' } },
+                            { email: { equals: cleanInput, mode: 'insensitive' } },
+                            { name: { equals: cleanInput, mode: 'insensitive' } },
+                            { staffId: cleanInput },
+                            { email: cleanInput },
+                            { name: cleanInput }
+                        ]
+                    }
+                });
             }
             catch (pErr) {
-                console.warn('Prisma login lookup timed out:', pErr);
+                console.warn('Prisma login lookup fallback error:', pErr);
             }
         }
         if (!user) {

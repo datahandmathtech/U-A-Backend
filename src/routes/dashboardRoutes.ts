@@ -113,26 +113,25 @@ router.get('/summary', authenticate, async (req, res) => {
     const laborCost = laborContracts.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
     const factoryExpenses = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0);
 
-    // Calculate Petty Cash in hand from CashTransaction
-    let cashTransactions: any[] = [];
+    // Calculate Petty Cash in hand from CashTransaction (synced with Cash Book)
+    let pettyCashInHand = 0;
     try {
+      let cashTransactions: any[] = [];
       if (db) {
         cashTransactions = await db.collection('CashTransaction').find({}).toArray();
       } else {
         cashTransactions = await prisma.cashTransaction.findMany();
       }
+      if (cashTransactions && cashTransactions.length > 0) {
+        const inSum = cashTransactions.filter((c: any) => c.type === 'IN').reduce((acc: number, c: any) => acc + (Number(c.amount) || 0), 0);
+        const outSum = cashTransactions.filter((c: any) => c.type === 'OUT').reduce((acc: number, c: any) => acc + (Number(c.amount) || 0), 0);
+        pettyCashInHand = inSum - outSum;
+      }
     } catch (e) {
       console.warn('Failed to query CashTransaction:', e);
     }
-    let pettyCashInHand = 124500;
-    if (cashTransactions.length > 0) {
-      const inSum = cashTransactions.filter((c: any) => c.type === 'IN').reduce((acc: number, c: any) => acc + (c.amount || 0), 0);
-      const outSum = cashTransactions.filter((c: any) => c.type === 'OUT').reduce((acc: number, c: any) => acc + (c.amount || 0), 0);
-      pettyCashInHand = inSum - outSum;
-      if (pettyCashInHand === 0) pettyCashInHand = 124500;
-    }
 
-    // Calculate Material Inward / Outward for current month
+    // Calculate Material Inward / Outward for current month (in piece quantity)
     const nowMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     let materialLogs: any[] = [];
     try {
@@ -148,12 +147,12 @@ router.get('/summary', authenticate, async (req, res) => {
     let outwardSum = 0;
     let inwardSum = 0;
     for (const log of materialLogs) {
-      const qty = Number(log.quantityProduced) || 0;
+      const qty = Math.round(Number(log.quantityProduced) || 0);
       if (log.transactionType === 'OUT') outwardSum += qty;
       else if (log.transactionType === 'IN') inwardSum += qty;
     }
-    const materialOutwardMonth = outwardSum > 0 ? outwardSum.toFixed(2) : '286.40';
-    const materialInwardMonth = inwardSum > 0 ? inwardSum.toFixed(2) : '362.75';
+    const materialOutwardMonth = outwardSum;
+    const materialInwardMonth = inwardSum;
     const displayFactoryExpenses = factoryExpenses > 0 ? factoryExpenses : 118950;
 
     const filteredElec = electricity.filter(e => {
@@ -194,7 +193,7 @@ router.get('/summary', authenticate, async (req, res) => {
       }
     };
 
-    fastCache.set(cacheKey, summaryData, 300);
+    fastCache.set(cacheKey, summaryData, 30);
     res.json(summaryData);
   } catch (error: any) {
     console.error('Dashboard summary error:', error);
