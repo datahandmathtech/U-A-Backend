@@ -1119,11 +1119,23 @@ router.post('/', authenticate, async (req, res) => {
 router.post('/:id/pieces', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { count, productName, vendorName, size, piecesArray } = req.body;
+    const { count, productName, vendorName, size, piecesArray, replaceExisting } = req.body;
     
     const slab = await prisma.slab.findUnique({ where: { id: String(id) }, include: { pieces: true } });
     if (!slab) return res.status(404).json({ message: 'Slab not found' });
     
+    // If replaceExisting is true (e.g. Breaking full slab into pieces), clean up previous unstarted full slab piece(s)
+    if (replaceExisting) {
+      const unstartedPieces = (slab.pieces || []).filter((p: any) => 
+        !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started'
+      );
+      if (unstartedPieces.length > 0) {
+        const unstartedIds = unstartedPieces.map((p: any) => p.id);
+        await prisma.pieceLog.deleteMany({ where: { pieceId: { in: unstartedIds } } }).catch(() => {});
+        await prisma.piece.deleteMany({ where: { id: { in: unstartedIds } } }).catch(() => {});
+      }
+    }
+
     let projectMaterial = null;
     let usedQuantity = 0;
     
@@ -1144,8 +1156,12 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
       projectMaterial = matched;
     }
 
-    const currentMaxPieceNumber = (slab as any).pieces?.length > 0 
-      ? Math.max(...(slab as any).pieces.map((p: any) => p.pieceNumber)) 
+    const remainingPieces = replaceExisting 
+      ? await prisma.piece.findMany({ where: { slabId: String(id) } })
+      : (slab.pieces || []);
+
+    const currentMaxPieceNumber = remainingPieces.length > 0 
+      ? Math.max(...remainingPieces.map((p: any) => p.pieceNumber || 0)) 
       : 0;
       
     const piecesData = [];
