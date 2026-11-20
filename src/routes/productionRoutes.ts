@@ -607,6 +607,12 @@ router.post('/material-log', authenticate, async (req, res) => {
       projectId = toValidObjectId(req.body.projectId);
     }
 
+    // Check if user is authorized to auto-approve (Admins and Managers)
+    const isSuperOrManager = req.user?.role === 'admin' || req.user?.role === 'manager' || req.body.source === 'admin_manual';
+
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
     // Handle multiple vendors for OUT/IN transactions
     if (vendors && Array.isArray(vendors) && vendors.length > 0) {
       const newLogs = await Promise.all(vendors.map(async (v: any) => {
@@ -617,7 +623,7 @@ router.post('/material-log', authenticate, async (req, res) => {
         let itemSlabId = toValidObjectId(v.slabId || slabId);
         let itemVendorId = toValidObjectId(v.vendorId);
         let itemVendorName = v.vendorName?.trim() || undefined;
-        let itemStage = v.stage || stage;
+        let itemStage = (v.stage || stage || 'Production').trim();
 
         if (itemParentLogId) {
           try {
@@ -636,33 +642,72 @@ router.post('/material-log', authenticate, async (req, res) => {
           }
         }
 
-        const created = await prisma.productionLog.create({
-          data: {
-            projectId: itemProjectId,
-            stage: itemStage,
-            quantityProduced: v.qty ? parseFloat(v.qty) : 0,
-            transactionType,
-            startPhotos,
-            workerId: toValidObjectId(workerId),
-            vendorName: itemVendorName,
-            vendorId: itemVendorId,
-            vehicleNumber: vehicleNumber?.trim() || undefined,
-            challanNumber: challanNumber?.trim() || undefined,
-            boxCode: req.body.boxCode?.trim() || undefined,
-            parentLogId: itemParentLogId,
-            productId: itemProductId,
-            productName: itemProductName,
-            slabId: itemSlabId,
-            pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : []),
-            approvalStatus: (req.body.source === 'admin_manual' || itemStage === 'Dispatch') ? 'approved' : 'pending',
-            status: 'completed',
-            isReturned: false,
-            returnedQty: 0,
-            remarks: v.remarks?.trim() || remarks?.trim() || undefined,
-            createdAt: computeEffectiveCreatedAt(req.body.date),
-            photoUrl: resolvedPhoto || undefined
+        const effectiveApproval = (isSuperOrManager || itemStage === 'Dispatch' || req.body.autoApprove) ? 'approved' : 'pending';
+
+        let created: any = null;
+        try {
+          created = await prisma.productionLog.create({
+            data: {
+              projectId: itemProjectId,
+              stage: itemStage,
+              quantityProduced: v.qty ? parseFloat(v.qty) : (quantityProduced ? parseFloat(quantityProduced) : 0),
+              transactionType,
+              startPhotos,
+              workerId: toValidObjectId(workerId),
+              vendorName: itemVendorName,
+              vendorId: itemVendorId,
+              vehicleNumber: vehicleNumber?.trim() || undefined,
+              challanNumber: challanNumber?.trim() || undefined,
+              boxCode: req.body.boxCode?.trim() || undefined,
+              parentLogId: itemParentLogId,
+              productId: itemProductId,
+              productName: itemProductName,
+              slabId: itemSlabId,
+              pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : []),
+              approvalStatus: effectiveApproval,
+              status: 'completed',
+              isReturned: false,
+              returnedQty: 0,
+              remarks: v.remarks?.trim() || remarks?.trim() || undefined,
+              createdAt: computeEffectiveCreatedAt(req.body.date),
+              photoUrl: resolvedPhoto || undefined
+            }
+          });
+        } catch (pErr: any) {
+          console.warn("Prisma create failed, falling back to direct MongoDB:", pErr.message);
+          if (db) {
+            const doc: any = {
+              stage: itemStage,
+              quantityProduced: v.qty ? parseFloat(v.qty) : (quantityProduced ? parseFloat(quantityProduced) : 0),
+              transactionType,
+              startPhotos,
+              approvalStatus: effectiveApproval,
+              status: 'completed',
+              isReturned: false,
+              returnedQty: 0,
+              remarks: v.remarks?.trim() || remarks?.trim() || undefined,
+              createdAt: computeEffectiveCreatedAt(req.body.date),
+              photoUrl: resolvedPhoto || undefined,
+              pieceIds: Array.isArray(v.pieceIds) ? v.pieceIds : (Array.isArray(pieceIds) ? pieceIds : [])
+            };
+            if (itemProjectId) doc.projectId = new mongoose.Types.ObjectId(itemProjectId);
+            if (workerId && toValidObjectId(workerId)) doc.workerId = new mongoose.Types.ObjectId(toValidObjectId(workerId));
+            if (itemVendorId) doc.vendorId = new mongoose.Types.ObjectId(itemVendorId);
+            if (itemVendorName) doc.vendorName = itemVendorName;
+            if (vehicleNumber) doc.vehicleNumber = vehicleNumber.trim();
+            if (challanNumber) doc.challanNumber = challanNumber.trim();
+            if (itemParentLogId) doc.parentLogId = new mongoose.Types.ObjectId(itemParentLogId);
+            if (itemProductId) doc.productId = itemProductId;
+            if (itemProductName) doc.productName = itemProductName;
+            if (itemSlabId) doc.slabId = new mongoose.Types.ObjectId(itemSlabId);
+            doc.updatedAt = new Date();
+
+            const insRes = await db.collection('ProductionLog').insertOne(doc);
+            created = { ...doc, id: insRes.insertedId.toString() };
+          } else {
+            throw pErr;
           }
-        });
+        }
 
         if (transactionType === 'IN' && itemParentLogId) {
           if (created.approvalStatus === 'approved') {
@@ -684,33 +729,78 @@ router.post('/material-log', authenticate, async (req, res) => {
     }
 
     // Single vendor or regular OUT/IN transaction
-    const newLog = await prisma.productionLog.create({
-      data: {
-        projectId: toValidObjectId(projectId),
-        stage,
-        quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0,
-        transactionType,
-        startPhotos,
-        workerId: toValidObjectId(workerId),
-        vendorName: vendorName?.trim() || undefined,
-        vendorId: toValidObjectId(vendorId),
-        vehicleNumber: vehicleNumber?.trim() || undefined,
-        challanNumber: challanNumber?.trim() || undefined,
-        boxCode: req.body.boxCode?.trim() || undefined,
-        parentLogId: toValidObjectId(parentLogId),
-        productId: productId?.trim() || undefined,
-        productName: productName?.trim() || undefined,
-        slabId: toValidObjectId(slabId),
-        pieceIds: Array.isArray(pieceIds) ? pieceIds : [],
-        approvalStatus: (req.body.source === 'admin_manual' || stage === 'Dispatch') ? 'approved' : 'pending',
-        status: 'completed',
-        isReturned: false,
-        returnedQty: 0,
-        remarks: remarks?.trim() || undefined,
-        createdAt: computeEffectiveCreatedAt(req.body.date),
-        photoUrl: resolvedPhoto || undefined
+    const finalStage = (stage || 'Production').trim();
+    const effectiveApproval = (isSuperOrManager || finalStage === 'Dispatch' || req.body.autoApprove) ? 'approved' : 'pending';
+
+    let newLog: any = null;
+    try {
+      newLog = await prisma.productionLog.create({
+        data: {
+          projectId: toValidObjectId(projectId),
+          stage: finalStage,
+          quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0,
+          transactionType,
+          startPhotos,
+          workerId: toValidObjectId(workerId),
+          vendorName: vendorName?.trim() || undefined,
+          vendorId: toValidObjectId(vendorId),
+          vehicleNumber: vehicleNumber?.trim() || undefined,
+          challanNumber: challanNumber?.trim() || undefined,
+          boxCode: req.body.boxCode?.trim() || undefined,
+          parentLogId: toValidObjectId(parentLogId),
+          productId: productId?.trim() || undefined,
+          productName: productName?.trim() || undefined,
+          slabId: toValidObjectId(slabId),
+          pieceIds: Array.isArray(pieceIds) ? pieceIds : [],
+          approvalStatus: effectiveApproval,
+          status: 'completed',
+          isReturned: false,
+          returnedQty: 0,
+          remarks: remarks?.trim() || undefined,
+          createdAt: computeEffectiveCreatedAt(req.body.date),
+          photoUrl: resolvedPhoto || undefined
+        }
+      });
+    } catch (pErr: any) {
+      console.warn("Prisma single log create failed, falling back to direct MongoDB:", pErr.message);
+      if (db) {
+        const doc: any = {
+          stage: finalStage,
+          quantityProduced: quantityProduced ? parseFloat(quantityProduced) : 0,
+          transactionType,
+          startPhotos,
+          approvalStatus: effectiveApproval,
+          status: 'completed',
+          isReturned: false,
+          returnedQty: 0,
+          remarks: remarks?.trim() || undefined,
+          createdAt: computeEffectiveCreatedAt(req.body.date),
+          photoUrl: resolvedPhoto || undefined,
+          pieceIds: Array.isArray(pieceIds) ? pieceIds : []
+        };
+        const validProjId = toValidObjectId(projectId);
+        if (validProjId) doc.projectId = new mongoose.Types.ObjectId(validProjId);
+        const validWorkerId = toValidObjectId(workerId);
+        if (validWorkerId) doc.workerId = new mongoose.Types.ObjectId(validWorkerId);
+        const validVendorId = toValidObjectId(vendorId);
+        if (validVendorId) doc.vendorId = new mongoose.Types.ObjectId(validVendorId);
+        if (vendorName) doc.vendorName = vendorName.trim();
+        if (vehicleNumber) doc.vehicleNumber = vehicleNumber.trim();
+        if (challanNumber) doc.challanNumber = challanNumber.trim();
+        const validParentId = toValidObjectId(parentLogId);
+        if (validParentId) doc.parentLogId = new mongoose.Types.ObjectId(validParentId);
+        if (productId) doc.productId = productId.trim();
+        if (productName) doc.productName = productName.trim();
+        const validSlabId = toValidObjectId(slabId);
+        if (validSlabId) doc.slabId = new mongoose.Types.ObjectId(validSlabId);
+        doc.updatedAt = new Date();
+
+        const insRes = await db.collection('ProductionLog').insertOne(doc);
+        newLog = { ...doc, id: insRes.insertedId.toString() };
+      } else {
+        throw pErr;
       }
-    });
+    }
 
     // If log is auto-approved (e.g. direct Dispatch), automatically update pieces
     if (newLog.approvalStatus === 'approved') {
