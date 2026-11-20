@@ -542,7 +542,7 @@ const toValidObjectId = (val: any): string | undefined => {
   return /^[0-9a-fA-F]{24}$/.test(trimmed) ? trimmed : undefined;
 };
 
-router.post('/material-log', authenticate, async (req, res) => {
+router.post('/material-log', authenticate, async (req: any, res: any) => {
   try {
     let { stage, quantityProduced, transactionType, startPhotos, workerId, vendorName, vendorId, vendors, parentLogId, vehicleNumber, challanNumber, productId, productName, slabId, pieceIds, requiresMachine, remarks } = req.body;
     
