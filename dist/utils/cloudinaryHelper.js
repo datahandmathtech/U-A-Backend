@@ -33,12 +33,21 @@ async function sanitizePhotos(photos) {
     if (typeof photos === 'string') {
         return await uploadBase64ToCloudinary(photos);
     }
+    if (Array.isArray(photos)) {
+        return await Promise.all(photos.map(p => sanitizePhotos(p)));
+    }
     if (typeof photos === 'object') {
-        const res = Array.isArray(photos) ? [] : {};
+        const res = {};
         for (const key of Object.keys(photos)) {
             const val = photos[key];
             if (typeof val === 'string' && val.startsWith('data:image/')) {
                 res[key] = await uploadBase64ToCloudinary(val);
+            }
+            else if (Array.isArray(val)) {
+                res[key] = await Promise.all(val.map(p => sanitizePhotos(p)));
+            }
+            else if (typeof val === 'object' && val !== null) {
+                res[key] = await sanitizePhotos(val);
             }
             else {
                 res[key] = val;

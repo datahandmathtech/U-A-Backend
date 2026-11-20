@@ -552,13 +552,27 @@ router.post('/material-log', authenticate, async (req, res) => {
       transactionType = 'IN';
     }
 
+    let photoUrls = req.body.photoUrls || [];
+    if (!Array.isArray(photoUrls)) {
+      photoUrls = photoUrls ? [photoUrls] : [];
+    }
+    if (photoUrls.length > 0) {
+      if (!startPhotos || typeof startPhotos !== 'object') {
+        startPhotos = { unit: photoUrls[0], machine: photoUrls[0], photos: photoUrls };
+      } else {
+        startPhotos.photos = photoUrls;
+        if (!startPhotos.unit && photoUrls[0]) startPhotos.unit = photoUrls[0];
+        if (!startPhotos.machine && photoUrls[0]) startPhotos.machine = photoUrls[0];
+      }
+    }
+
     startPhotos = await sanitizePhotos(startPhotos);
 
-    let directPhotoUrl = req.body.photoUrl;
+    let directPhotoUrl = req.body.photoUrl || (Array.isArray(startPhotos?.photos) ? startPhotos.photos[0] : undefined);
     if (directPhotoUrl && typeof directPhotoUrl === 'string' && directPhotoUrl.startsWith('data:image/')) {
       directPhotoUrl = await uploadBase64ToCloudinary(directPhotoUrl);
     }
-    const resolvedPhoto = directPhotoUrl || (typeof startPhotos === 'object' ? (startPhotos.machine || startPhotos.unit || startPhotos.software) : startPhotos) || undefined;
+    const resolvedPhoto = directPhotoUrl || (typeof startPhotos === 'object' ? (startPhotos.machine || startPhotos.unit || startPhotos.software || startPhotos.photos?.[0]) : startPhotos) || undefined;
 
     const computeEffectiveCreatedAt = (dateInput?: any) => {
       const now = new Date();
@@ -1678,7 +1692,29 @@ router.put('/:id', authenticate, async (req, res) => {
     }
     
     if (startPhotos) {
-      updateData.startPhotos = startPhotos;
+      updateData.startPhotos = await sanitizePhotos(startPhotos);
+    }
+
+    if (req.body.photoUrls) {
+      let pUrls = req.body.photoUrls;
+      if (!Array.isArray(pUrls)) pUrls = [pUrls];
+      pUrls = await sanitizePhotos(pUrls);
+      if (!updateData.startPhotos || typeof updateData.startPhotos !== 'object') {
+        updateData.startPhotos = { unit: pUrls[0], machine: pUrls[0], photos: pUrls };
+      } else {
+        updateData.startPhotos.photos = pUrls;
+      }
+      updateData.photoUrl = pUrls[0] || undefined;
+    } else if (photoUrl) {
+      let singlePhoto = photoUrl;
+      if (typeof singlePhoto === 'string' && singlePhoto.startsWith('data:image/')) {
+        singlePhoto = await uploadBase64ToCloudinary(singlePhoto);
+      }
+      updateData.photoUrl = singlePhoto;
+    }
+
+    if (req.body.remarks !== undefined) {
+      updateData.remarks = req.body.remarks?.trim() || undefined;
     }
 
     const updated = await prisma.productionLog.update({
