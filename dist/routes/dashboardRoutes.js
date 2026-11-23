@@ -148,7 +148,6 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         }
         const materialOutwardMonth = outwardSum;
         const materialInwardMonth = inwardSum;
-        const displayFactoryExpenses = factoryExpenses > 0 ? factoryExpenses : 118950;
         const filteredElec = electricity.filter(e => {
             if (!fy)
                 return true;
@@ -166,23 +165,23 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         const electricityCost = filteredElec.reduce((acc, curr) => acc + (curr.totalBill || 0), 0);
         const netProfit = totalRevenue - (laborCost + factoryExpenses + electricityCost);
         const summaryData = {
-            totalLeads: totalLeads > 0 ? totalLeads : 3,
-            activeProjects: activeProjects > 0 ? activeProjects : 15,
-            completedProjects: completedProjects > 0 ? completedProjects : 8,
-            totalOrders: (activeProjects + completedProjects) > 0 ? (activeProjects + completedProjects) : 23,
+            totalLeads,
+            activeProjects,
+            completedProjects,
+            totalOrders: activeProjects + completedProjects,
             pendingQuotations,
             readyForDispatch,
             totalRevenue,
             advancePaidTotal,
-            pendingInvoicesTotal: advancePaidTotal > 0 ? advancePaidTotal : pendingInvoicesTotal,
+            pendingInvoicesTotal,
             pettyCashInHand,
             materialOutwardMonth,
             materialInwardMonth,
-            factoryExpenses: displayFactoryExpenses,
+            factoryExpenses,
             profitability: {
                 totalRevenue,
                 laborCost,
-                factoryExpenses: displayFactoryExpenses,
+                factoryExpenses,
                 electricityCost,
                 netProfit
             }
