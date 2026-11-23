@@ -143,7 +143,7 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
             { email: cleanInput },
             { email: lowerInput },
             { name: cleanInput },
-            ...(lowerInput === 'admin' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
+            ...(lowerInput === 'admin' || lowerInput === 'admin@demo.com' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
           ]
         });
         if (rawUser) {
@@ -161,10 +161,10 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
       console.warn('Mongoose login lookup error, checking Prisma fallback:', mErr);
     }
 
-    // 2. Prisma Fallback if Mongoose query did not find user
+    // 2. Prisma Fallback if Mongoose query did not find user (with 3-second safeguard timeout)
     if (!user) {
       try {
-        user = await prisma.user.findFirst({
+        const prismaPromise = prisma.user.findFirst({
           where: {
             OR: [
               { staffId: { equals: cleanInput, mode: 'insensitive' } },
@@ -173,12 +173,16 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
               { staffId: cleanInput },
               { email: cleanInput },
               { name: cleanInput },
-              ...(lowerInput === 'admin' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
+              ...(lowerInput === 'admin' || lowerInput === 'admin@demo.com' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
             ]
           }
         });
-      } catch (pErr) {
-        console.warn('Prisma login lookup fallback error:', pErr);
+        user = await Promise.race([
+          prismaPromise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma lookup timeout')), 3000))
+        ]);
+      } catch (pErr: any) {
+        console.warn('Prisma login lookup fallback note:', pErr?.message || pErr);
       }
     }
 

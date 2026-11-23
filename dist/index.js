@@ -300,21 +300,30 @@ const server = isNamedPipeOrSocket
     });
 async function ensureInitialAdminUser() {
     try {
-        const userCount = await exports.prisma.user.count();
-        if (userCount === 0) {
-            console.log('Empty database detected. Auto-creating initial Admin user...');
-            const bcrypt = require('bcryptjs');
-            const hashedPassword = await bcrypt.hash('password123', 10);
-            await exports.prisma.user.create({
-                data: {
+        const mongoose = require('mongoose');
+        let db = mongoose.connection?.db;
+        if (!db && mongoose.connection.readyState !== 1) {
+            await mongoose.connection.asPromise().catch(() => { });
+            db = mongoose.connection?.db;
+        }
+        if (db) {
+            const userCount = await db.collection('User').countDocuments();
+            if (userCount === 0) {
+                console.log('Empty database detected. Auto-creating initial Admin user via Mongoose...');
+                const bcrypt = require('bcryptjs');
+                const hashedPassword = await bcrypt.hash('password123', 10);
+                await db.collection('User').insertOne({
                     name: 'Admin User',
                     email: 'admin@demo.com',
                     password: hashedPassword,
                     role: 'admin',
-                    department: 'Management'
-                }
-            });
-            console.log('Initial Admin user auto-created: admin@demo.com / password123');
+                    department: 'Management',
+                    modulesAccess: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
+                console.log('Initial Admin user auto-created: admin@demo.com / password123');
+            }
         }
     }
     catch (err) {
