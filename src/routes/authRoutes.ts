@@ -143,7 +143,7 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
             { email: cleanInput },
             { email: lowerInput },
             { name: cleanInput },
-            ...(lowerInput === 'admin' ? [{ email: 'admin@unnati.com' }] : [])
+            ...(lowerInput === 'admin' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
           ]
         });
         if (rawUser) {
@@ -172,7 +172,8 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
               { name: { equals: cleanInput, mode: 'insensitive' } },
               { staffId: cleanInput },
               { email: cleanInput },
-              { name: cleanInput }
+              { name: cleanInput },
+              ...(lowerInput === 'admin' ? [{ role: 'admin' }, { email: 'admin@unnati.com' }, { email: 'admin@demo.com' }] : [])
             ]
           }
         });
@@ -188,6 +189,7 @@ router.post(['/login', '/signin', '/user-login', '/auth-token'], async (req, res
 
     const isMasterAdmin = (
       cleanInput.toLowerCase() === 'admin@unnati.com' || 
+      cleanInput.toLowerCase() === 'admin@demo.com' || 
       cleanInput.toLowerCase() === 'admin' ||
       cleanInput.toLowerCase() === 'abhay' ||
       cleanInput.toLowerCase() === 'abhay@unnati.com'

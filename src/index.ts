@@ -312,4 +312,28 @@ const server = app.listen(Number(port), '0.0.0.0', () => {
   console.log(`Server is running on port ${port} at`, server.address());
   initCronJobs();
   console.log('Cron jobs initialized');
+  ensureInitialAdminUser();
 });
+
+async function ensureInitialAdminUser() {
+  try {
+    const userCount = await prisma.user.count();
+    if (userCount === 0) {
+      console.log('Empty database detected. Auto-creating initial Admin user...');
+      const bcrypt = require('bcryptjs');
+      const hashedPassword = await bcrypt.hash('password123', 10);
+      await prisma.user.create({
+        data: {
+          name: 'Admin User',
+          email: 'admin@demo.com',
+          password: hashedPassword,
+          role: 'admin',
+          department: 'Management'
+        }
+      });
+      console.log('Initial Admin user auto-created: admin@demo.com / password123');
+    }
+  } catch (err: any) {
+    console.warn('Auto-seed check notice:', err?.message || err);
+  }
+}
