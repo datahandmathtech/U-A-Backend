@@ -1147,7 +1147,7 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
                     !(existingSlabWithPieces.pieces.length === 1 && String(existingSlabWithPieces.pieces[0]?.productName || '').includes('(Full Slab)'));
                 if (hasCustomPieces && size !== existingSlabWithPieces.size) {
                     return res.status(400).json({
-                        message: "Aapne is slab ke pieces banaye hue hain. Slab specification edit karne ke liye pehle andar ke pieces ko delete karein."
+                        message: "Cannot edit slab specification because custom pieces exist inside it. Please delete the inside pieces first before editing the slab."
                     });
                 }
                 const existingPiecesArea = (0, projectSync_1.calculateSlabExistingPiecesArea)(existingSlabWithPieces.pieces);

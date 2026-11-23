@@ -273,7 +273,7 @@ export const syncSlabsAndQuotationFromProducts = async (
           !(matched.pieces.length === 1 && String(matched.pieces[0]?.productName || '').includes('(Full Slab)'));
 
         if (hasCustomPieces && matched.size !== sizeFormatted) {
-          throw new Error(`Slab "${rawName}" ke pieces bane hue hain. Size change karne ke liye pehle andar ke pieces delete karein.`);
+          throw new Error(`Cannot change size of slab "${rawName}" because inside pieces exist. Please delete inside pieces first.`);
         }
 
         const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
@@ -321,7 +321,7 @@ export const syncSlabsAndQuotationFromProducts = async (
             !(matched.pieces.length === 1 && String(matched.pieces[0]?.productName || '').includes('(Full Slab)'));
 
           if (hasCustomPieces && matched.size !== sizeFormatted) {
-            throw new Error(`Slab "${pieceSlabName}" ke pieces bane hue hain. Size change karne ke liye pehle andar ke pieces delete karein.`);
+            throw new Error(`Cannot change size of slab "${pieceSlabName}" because inside pieces exist. Please delete inside pieces first.`);
           }
 
           const singleSlabSqFt = normProd.sqft; // normProd.sqft is already the single piece area
