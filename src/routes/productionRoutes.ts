@@ -461,46 +461,106 @@ router.get('/active-out-logs', authenticate, async (req, res) => {
     const cached = fastCache.get('prod_active_out_logs');
     if (cached) return res.json(cached);
 
-    const [allApprovedOutLogs, pendingInLogs] = await Promise.all([
-      prisma.productionLog.findMany({
-        where: {
-          transactionType: 'OUT',
-          approvalStatus: 'approved',
-          OR: [
-            { isReturned: false },
-            { isReturned: null }
-          ]
-        },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          worker: { select: { name: true, staffId: true } },
-          project: { select: { name: true, projectId: true, clientName: true } }
-        }
-      }),
-      prisma.productionLog.findMany({
-        where: {
-          transactionType: 'IN',
-          approvalStatus: { in: ['pending', 'redo_in_progress'] },
-          parentLogId: { not: null }
-        },
-        select: {
-          parentLogId: true,
-          quantityProduced: true
-        }
-      })
-    ]);
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const [rawOutLogs, rawInLogs] = await Promise.all([
+          db.collection('ProductionLog').find({
+            transactionType: 'OUT',
+            approvalStatus: 'approved',
+            $or: [
+              { isReturned: false },
+              { isReturned: null },
+              { isReturned: { $exists: false } }
+            ]
+          }).sort({ createdAt: -1 }).toArray(),
+          db.collection('ProductionLog').find({
+            transactionType: 'IN',
+            approvalStatus: { $in: ['pending', 'redo_in_progress'] },
+            parentLogId: { $ne: null }
+          }, { projection: { parentLogId: 1, quantityProduced: 1 } }).toArray()
+        ]);
+
+        const workerIds = rawOutLogs.map((l: any) => l.workerId).filter(Boolean);
+        const projectIds = rawOutLogs.map((l: any) => l.projectId).filter(Boolean);
+
+        const [rawWorkers, rawProjects] = await Promise.all([
+          db.collection('User').find({ _id: { $in: workerIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1, staffId: 1 } }).toArray(),
+          db.collection('Project').find({ _id: { $in: projectIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray()
+        ]);
+
+        const workerMap = new Map();
+        rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name, staffId: w.staffId }));
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const allApprovedOutLogs = rawOutLogs.map((log: any) => ({
+          ...log,
+          id: log._id.toString(),
+          worker: log.workerId ? workerMap.get(log.workerId.toString()) : null,
+          project: log.projectId ? projectMap.get(log.projectId.toString()) : null
+        }));
+
+        const activeOutLogs = allApprovedOutLogs.filter((log: any) => {
+          const pendingReturns = rawInLogs
+            .filter((inLog: any) => String(inLog.parentLogId) === String(log.id))
+            .reduce((sum: number, inLog: any) => sum + (inLog.quantityProduced || 0), 0);
+            
+          const availableQty = (log.quantityProduced || 0) - (log.returnedQty || 0) - pendingReturns;
+          log.pendingQty = Math.max(0, availableQty);
+          return availableQty > 0;
+        });
+
+        fastCache.set('prod_active_out_logs', activeOutLogs, 15);
+        return res.json(activeOutLogs);
+      } catch (mErr) {
+        console.warn('Mongoose active OUT logs error, falling back:', mErr);
+      }
+    }
+
+    const [allApprovedOutLogs, pendingInLogs] = await Promise.race([
+      Promise.all([
+        prisma.productionLog.findMany({
+          where: {
+            transactionType: 'OUT',
+            approvalStatus: 'approved',
+            OR: [
+              { isReturned: false },
+              { isReturned: null }
+            ]
+          },
+          orderBy: { createdAt: 'desc' },
+          include: {
+            worker: { select: { name: true, staffId: true } },
+            project: { select: { name: true, projectId: true, clientName: true } }
+          }
+        }),
+        prisma.productionLog.findMany({
+          where: {
+            transactionType: 'IN',
+            approvalStatus: { in: ['pending', 'redo_in_progress'] },
+            parentLogId: { not: null }
+          },
+          select: {
+            parentLogId: true,
+            quantityProduced: true
+          }
+        })
+      ]),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('Prisma timeout')), 3000))
+    ]).catch(() => [[], []]);
 
     // Subtract pending quantities
-    const activeOutLogs = allApprovedOutLogs.filter(log => {
-      const pendingReturns = pendingInLogs
-        .filter(inLog => String(inLog.parentLogId) === String(log.id))
-        .reduce((sum, inLog) => sum + (inLog.quantityProduced || 0), 0);
+    const activeOutLogs = (allApprovedOutLogs || []).filter((log: any) => {
+      const pendingReturns = (pendingInLogs || [])
+        .filter((inLog: any) => String(inLog.parentLogId) === String(log.id))
+        .reduce((sum: number, inLog: any) => sum + (inLog.quantityProduced || 0), 0);
         
       const availableQty = (log.quantityProduced || 0) - (log.returnedQty || 0) - pendingReturns;
-      
-      // Attach remaining available quantity so frontend displays it directly
       (log as any).pendingQty = Math.max(0, availableQty);
-      
       return availableQty > 0;
     });
 
@@ -518,14 +578,54 @@ router.get('/rejected-logs', authenticate, async (req, res) => {
     const cached = fastCache.get('prod_rejected_logs');
     if (cached) return res.json(cached);
 
-    const rejectedLogs = await prisma.productionLog.findMany({
-      where: { approvalStatus: { in: ['rejected_admin', 'redo_in_progress'] } },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        worker: { select: { name: true, staffId: true } },
-        project: { select: { name: true, projectId: true, clientName: true } }
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawRejected = await db.collection('ProductionLog').find({
+          approvalStatus: { $in: ['rejected_admin', 'redo_in_progress'] }
+        }).sort({ createdAt: -1 }).toArray();
+
+        const workerIds = rawRejected.map((l: any) => l.workerId).filter(Boolean);
+        const projectIds = rawRejected.map((l: any) => l.projectId).filter(Boolean);
+
+        const [rawWorkers, rawProjects] = await Promise.all([
+          db.collection('User').find({ _id: { $in: workerIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1, staffId: 1 } }).toArray(),
+          db.collection('Project').find({ _id: { $in: projectIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray()
+        ]);
+
+        const workerMap = new Map();
+        rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name, staffId: w.staffId }));
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const rejectedLogs = rawRejected.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          worker: l.workerId ? workerMap.get(l.workerId.toString()) : null,
+          project: l.projectId ? projectMap.get(l.projectId.toString()) : null
+        }));
+
+        fastCache.set('prod_rejected_logs', rejectedLogs, 15);
+        return res.json(rejectedLogs);
+      } catch (mErr) {
+        console.warn('Mongoose rejected logs error:', mErr);
       }
-    });
+    }
+
+    const rejectedLogs = await Promise.race([
+      prisma.productionLog.findMany({
+        where: { approvalStatus: { in: ['rejected_admin', 'redo_in_progress'] } },
+        orderBy: { createdAt: 'desc' },
+        include: {
+          worker: { select: { name: true, staffId: true } },
+          project: { select: { name: true, projectId: true, clientName: true } }
+        }
+      }),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('Prisma timeout')), 3000))
+    ]).catch(() => []);
 
     fastCache.set('prod_rejected_logs', rejectedLogs, 15);
     res.json(rejectedLogs);
@@ -1703,15 +1803,56 @@ router.get('/approved-logs', authenticate, async (req, res) => {
     const cached = fastCache.get('prod_approved_logs');
     if (cached) return res.json(cached);
 
-    const approvedLogs = await prisma.productionLog.findMany({
-      where: { approvalStatus: 'approved' },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
-      include: {
-        worker: { select: { name: true } },
-        project: { select: { name: true, projectId: true, clientName: true } }
+    const mongoose = require('mongoose');
+    let db = mongoose.connection?.db;
+
+    if (db) {
+      try {
+        const rawApproved = await db.collection('ProductionLog').find({ approvalStatus: 'approved' })
+          .sort({ createdAt: -1 })
+          .limit(200)
+          .toArray();
+
+        const workerIds = rawApproved.map((l: any) => l.workerId).filter(Boolean);
+        const projectIds = rawApproved.map((l: any) => l.projectId).filter(Boolean);
+
+        const [rawWorkers, rawProjects] = await Promise.all([
+          db.collection('User').find({ _id: { $in: workerIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1 } }).toArray(),
+          db.collection('Project').find({ _id: { $in: projectIds.map((id: any) => { try { return new mongoose.Types.ObjectId(id); } catch { return id; } }) } }, { projection: { name: 1, projectId: 1, clientName: 1 } }).toArray()
+        ]);
+
+        const workerMap = new Map();
+        rawWorkers.forEach((w: any) => workerMap.set(w._id.toString(), { name: w.name }));
+
+        const projectMap = new Map();
+        rawProjects.forEach((p: any) => projectMap.set(p._id.toString(), { name: p.name, projectId: p.projectId, clientName: p.clientName }));
+
+        const approvedLogs = rawApproved.map((l: any) => ({
+          ...l,
+          id: l._id.toString(),
+          worker: l.workerId ? workerMap.get(l.workerId.toString()) : null,
+          project: l.projectId ? projectMap.get(l.projectId.toString()) : null
+        }));
+
+        fastCache.set('prod_approved_logs', approvedLogs, 15);
+        return res.json(approvedLogs);
+      } catch (mErr) {
+        console.warn('Mongoose approved logs error, falling back:', mErr);
       }
-    });
+    }
+
+    const approvedLogs = await Promise.race([
+      prisma.productionLog.findMany({
+        where: { approvalStatus: 'approved' },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        include: {
+          worker: { select: { name: true } },
+          project: { select: { name: true, projectId: true, clientName: true } }
+        }
+      }),
+      new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('Prisma timeout')), 3000))
+    ]).catch(() => []);
 
     fastCache.set('prod_approved_logs', approvedLogs, 15);
     res.json(approvedLogs);
