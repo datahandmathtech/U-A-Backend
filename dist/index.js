@@ -283,12 +283,21 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 const cronJobs_1 = require("./utils/cronJobs");
 // Start Server
-const server = app.listen(Number(port), '0.0.0.0', () => {
-    console.log(`Server is running on port ${port} at`, server.address());
-    (0, cronJobs_1.initCronJobs)();
-    console.log('Cron jobs initialized');
-    ensureInitialAdminUser();
-});
+const rawPort = process.env.PORT || 5000;
+const isNamedPipeOrSocket = isNaN(Number(rawPort));
+const server = isNamedPipeOrSocket
+    ? app.listen(rawPort, () => {
+        console.log(`Server is running on Hostinger socket: ${rawPort}`);
+        (0, cronJobs_1.initCronJobs)();
+        console.log('Cron jobs initialized');
+        ensureInitialAdminUser();
+    })
+    : app.listen(Number(rawPort), '0.0.0.0', () => {
+        console.log(`Server is running on port ${rawPort} at`, server.address());
+        (0, cronJobs_1.initCronJobs)();
+        console.log('Cron jobs initialized');
+        ensureInitialAdminUser();
+    });
 async function ensureInitialAdminUser() {
     try {
         const userCount = await exports.prisma.user.count();
