@@ -1175,12 +1175,13 @@ router.put('/:id', authMiddleware_1.authenticate, async (req, res) => {
         // If size or name changed and there's 1 piece (full slab), sync piece specifications
         try {
             const pieces = await index_1.prisma.piece.findMany({ where: { slabId: String(id) } });
-            if (pieces.length === 1 && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
+            if (pieces.length === 1) {
                 const pieceUpdate = {};
                 if (updateData.size)
                     pieceUpdate.size = updateData.size;
-                if (updateData.name)
+                if (updateData.name && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
                     pieceUpdate.productName = `${updateData.name} 1.1 (Full Slab)`;
+                }
                 if (Object.keys(pieceUpdate).length > 0) {
                     await index_1.prisma.piece.updateMany({
                         where: { slabId: String(id) },

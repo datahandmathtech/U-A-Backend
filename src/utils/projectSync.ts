@@ -17,7 +17,6 @@ export const formatProductToSlabSize = (prod: any): string => {
   const l = parseFloat(prod.length) || 0;
   const w = parseFloat(prod.width) || 0;
   const t = parseFloat(prod.breadth ?? prod.thickness) || 0;
-  const isLargeMM = l > 150 || w > 150;
 
   const u = (prod.unit || 'pieces').toLowerCase().trim();
   const isPieces = u === 'pieces' || u === 'piece' || u === 'pcs' || !u;
@@ -26,10 +25,10 @@ export const formatProductToSlabSize = (prod: any): string => {
   if (isPieces) {
     const dimU = (prod.dimensionUnit || 'inch').toLowerCase().trim();
     isFt = dimU === 'sq_ft' || dimU === 'sqft' || dimU === 'feet' || dimU === 'ft';
-    isMM = dimU === 'mm' || isLargeMM;
+    isMM = dimU === 'mm';
   } else {
     isFt = u === 'sq_ft' || u === 'sqft' || u === 'sq. ft' || u === 'sq ft' || u.includes('feet') || u.includes('sq') || u.includes('ft') || u.includes('rft');
-    isMM = u === 'mm' || u.includes('millimeter') || isLargeMM;
+    isMM = u === 'mm' || u.includes('millimeter');
   }
   const unitLabel = isFt ? 'Feet' : (isMM ? 'MM' : 'Inch');
   if (l <= 0 && w <= 0 && prod.size) {
@@ -47,22 +46,20 @@ export const parsePieceAreaSqFt = (sizeStr?: string | null): number => {
   const wMatch = raw.match(/(\d+(?:\.\d+)?)\s*W/i) || dimsPart.match(/[xX*×]\s*(\d+(?:\.\d+)?)/);
   const l = (lMatch && lMatch[1]) ? parseFloat(lMatch[1]) : 0;
   const w = (wMatch && wMatch[1]) ? parseFloat(wMatch[1]) : 0;
-  const isLargeMM = l > 150 || w > 150;
 
   const explicitMatch = raw.match(/([\d.]+)\s*Sq\.?Ft/i);
   if (explicitMatch && explicitMatch[1]) {
-    const val = parseFloat(explicitMatch[1]) || 0;
-    if (isLargeMM && val > 500) {
-      return Math.round(((l * w) / 92903.04) * 100) / 100;
-    }
-    return val;
+    return parseFloat(explicitMatch[1]) || 0;
   }
 
   if (l > 0 && w > 0) {
     if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
       return l * w;
     }
-    if (dimsPart.includes('mm') || isLargeMM) {
+    if (dimsPart.includes('inch') || dimsPart.includes('"')) {
+      return (l * w) / 144;
+    }
+    if (dimsPart.includes('mm')) {
       return (l * w) / 92903.04;
     }
     return (l * w) / 144;
@@ -96,14 +93,19 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
     if (wMatch && wMatch[1]) w = parseFloat(wMatch[1]) || 0;
     if (tMatch && tMatch[1]) breadth = parseFloat(tMatch[1]) || 0;
 
-    const isLargeMM = l > 150 || w > 150;
     const existingDimUnit = (existingProduct?.dimensionUnit || existingProduct?.unit || '').toLowerCase();
-    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft') || existingDimUnit.includes('feet') || existingDimUnit.includes('ft') || existingDimUnit.includes('sq')) {
+    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
       dimUnit = 'sq_ft';
-    } else if (dimsPart.includes('mm') || isLargeMM || existingDimUnit === 'mm' || existingDimUnit.includes('milli')) {
-      dimUnit = 'mm';
-    } else if (dimsPart.includes('inch') || dimsPart.includes('"') || existingDimUnit.includes('inch')) {
+    } else if (dimsPart.includes('inch') || dimsPart.includes('"')) {
       dimUnit = 'inch';
+    } else if (dimsPart.includes('mm')) {
+      dimUnit = 'mm';
+    } else if (existingDimUnit.includes('feet') || existingDimUnit.includes('ft') || existingDimUnit.includes('sq')) {
+      dimUnit = 'sq_ft';
+    } else if (existingDimUnit.includes('inch') || existingDimUnit.includes('"')) {
+      dimUnit = 'inch';
+    } else if (existingDimUnit === 'mm' || existingDimUnit.includes('milli')) {
+      dimUnit = 'mm';
     }
   }
 
