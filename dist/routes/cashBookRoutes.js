@@ -4,14 +4,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const mongoose_1 = __importDefault(require("mongoose"));
 const index_1 = require("../index");
 const fastCache_1 = require("../utils/fastCache");
 const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
+const getDb = () => mongoose_1.default.connection?.db;
 // GET all cash transactions and summary
 router.get('/', auth_1.authenticate, async (req, res) => {
     try {
         const { startDate, endDate, month, year, category, type } = req.query;
+        const cacheKey = `cash_book_${startDate || ''}_${endDate || ''}_${month !== undefined ? month : ''}_${year || ''}_${category || ''}_${type || ''}`;
+        const cachedData = fastCache_1.fastCache.get(cacheKey);
+        if (cachedData) {
+            return res.json(cachedData);
+        }
         const where = {};
         if (type && (type === 'IN' || type === 'OUT')) {
             where.type = type;
@@ -36,26 +43,66 @@ router.get('/', auth_1.authenticate, async (req, res) => {
             const end = new Date(y, m + 1, 0, 23, 59, 59, 999);
             where.date = { gte: start, lte: end };
         }
-        // 1. Calculate overall totals (All-time or up to filtered date)
-        const allTransactions = await index_1.prisma.cashTransaction.findMany({
-            orderBy: { date: 'asc' },
-            include: {
-                createdBy: {
-                    select: { id: true, name: true }
-                }
+        let allTransactions = [];
+        const db = getDb();
+        if (db) {
+            try {
+                const rawTxs = await db.collection('CashTransaction').find({}).sort({ date: 1 }).toArray();
+                // Extract unique user IDs for createdBy lookup
+                const userIds = Array.from(new Set(rawTxs.map((t) => t.createdById).filter(Boolean)));
+                const userObjIds = userIds.filter((id) => mongoose_1.default.Types.ObjectId.isValid(id)).map((id) => new mongoose_1.default.Types.ObjectId(id));
+                const rawUsers = userIds.length > 0
+                    ? await db.collection('User').find({ $or: [{ _id: { $in: userObjIds } }, { id: { $in: userIds } }] }, { projection: { name: 1 } }).toArray()
+                    : [];
+                const userMap = new Map();
+                rawUsers.forEach((u) => {
+                    userMap.set(u._id.toString(), { id: u._id.toString(), name: u.name });
+                });
+                allTransactions = rawTxs.map((tx) => {
+                    const u = tx.createdById ? userMap.get(tx.createdById.toString()) || null : null;
+                    return {
+                        ...tx,
+                        id: tx._id.toString(),
+                        amount: Number(tx.amount) || 0,
+                        createdBy: u
+                    };
+                });
             }
-        });
+            catch (mErr) {
+                console.warn('Mongoose cash transaction query error, falling back to Prisma:', mErr);
+            }
+        }
+        // Prisma Fallback with 3-second safeguard timeout if db collection didn't succeed
+        if (allTransactions.length === 0 && !db) {
+            try {
+                const prismaPromise = index_1.prisma.cashTransaction.findMany({
+                    orderBy: { date: 'asc' },
+                    include: {
+                        createdBy: {
+                            select: { id: true, name: true }
+                        }
+                    }
+                });
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Prisma cash query timeout')), 3000));
+                allTransactions = (await Promise.race([prismaPromise, timeoutPromise]));
+            }
+            catch (pErr) {
+                console.warn('Prisma cash transaction fallback error:', pErr);
+                allTransactions = [];
+            }
+        }
         let overallIn = 0;
         let overallOut = 0;
         let runningBal = 0;
         const enrichedAll = allTransactions.map((tx) => {
+            const amt = Number(tx.amount) || 0;
             if (tx.type === 'IN') {
-                overallIn += tx.amount;
-                runningBal += tx.amount;
+                overallIn += amt;
+                runningBal += amt;
             }
             else {
-                overallOut += tx.amount;
-                runningBal -= tx.amount;
+                overallOut += amt;
+                runningBal -= amt;
             }
             return {
                 ...tx,
@@ -80,9 +127,9 @@ router.get('/', auth_1.authenticate, async (req, res) => {
         }
         // Sort descending for display (latest first)
         const displayTransactions = [...filteredTransactions].reverse();
-        const periodIn = filteredTransactions.filter(t => t.type === 'IN').reduce((acc, t) => acc + t.amount, 0);
-        const periodOut = filteredTransactions.filter(t => t.type === 'OUT').reduce((acc, t) => acc + t.amount, 0);
-        res.json({
+        const periodIn = filteredTransactions.filter((t) => t.type === 'IN').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+        const periodOut = filteredTransactions.filter((t) => t.type === 'OUT').reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+        const result = {
             summary: {
                 totalIn: Math.round(overallIn * 100) / 100,
                 totalOut: Math.round(overallOut * 100) / 100,
@@ -92,7 +139,9 @@ router.get('/', auth_1.authenticate, async (req, res) => {
                 transactionCount: filteredTransactions.length
             },
             transactions: displayTransactions
-        });
+        };
+        fastCache_1.fastCache.set(cacheKey, result, 15);
+        return res.json(result);
     }
     catch (error) {
         console.error('Error fetching cash book:', error);
@@ -110,22 +159,51 @@ router.post('/', auth_1.authenticate, async (req, res) => {
         if (isNaN(numAmount) || numAmount <= 0) {
             return res.status(400).json({ message: 'Valid positive amount is required' });
         }
-        const newTx = await index_1.prisma.cashTransaction.create({
-            data: {
-                type: type === 'IN' ? 'IN' : 'OUT',
-                amount: numAmount,
-                category: category.trim(),
-                description: description?.trim() || null,
-                paidToReceivedFrom: paidToReceivedFrom?.trim() || null,
-                paymentMode: paymentMode || 'Cash',
-                voucherNumber: voucherNumber?.trim() || null,
-                receiptPhoto: receiptPhoto || null,
-                date: date ? new Date(date) : new Date(),
-                sourceModule: sourceModule || 'manual',
-                sourceId: sourceId || null,
-                createdById: req.user?.id || undefined
+        const db = getDb();
+        let newTx = null;
+        if (db) {
+            try {
+                const txDoc = {
+                    type: type === 'IN' ? 'IN' : 'OUT',
+                    amount: numAmount,
+                    category: category.trim(),
+                    description: description?.trim() || null,
+                    paidToReceivedFrom: paidToReceivedFrom?.trim() || null,
+                    paymentMode: paymentMode || 'Cash',
+                    voucherNumber: voucherNumber?.trim() || null,
+                    receiptPhoto: receiptPhoto || null,
+                    date: date ? new Date(date) : new Date(),
+                    sourceModule: sourceModule || 'manual',
+                    sourceId: sourceId || null,
+                    createdById: req.user?.id ? (mongoose_1.default.Types.ObjectId.isValid(req.user.id) ? new mongoose_1.default.Types.ObjectId(req.user.id) : req.user.id) : null,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                };
+                const ins = await db.collection('CashTransaction').insertOne(txDoc);
+                newTx = { ...txDoc, id: ins.insertedId.toString() };
             }
-        });
+            catch (mErr) {
+                console.warn('Mongoose insert failed, falling back to Prisma:', mErr);
+            }
+        }
+        if (!newTx) {
+            newTx = await index_1.prisma.cashTransaction.create({
+                data: {
+                    type: type === 'IN' ? 'IN' : 'OUT',
+                    amount: numAmount,
+                    category: category.trim(),
+                    description: description?.trim() || null,
+                    paidToReceivedFrom: paidToReceivedFrom?.trim() || null,
+                    paymentMode: paymentMode || 'Cash',
+                    voucherNumber: voucherNumber?.trim() || null,
+                    receiptPhoto: receiptPhoto || null,
+                    date: date ? new Date(date) : new Date(),
+                    sourceModule: sourceModule || 'manual',
+                    sourceId: sourceId || null,
+                    createdById: req.user?.id || undefined
+                }
+            });
+        }
         fastCache_1.fastCache.clearAll();
         res.status(201).json(newTx);
     }
@@ -139,7 +217,7 @@ router.put('/:id', auth_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
         const { type, amount, category, description, paidToReceivedFrom, paymentMode, voucherNumber, receiptPhoto, date } = req.body;
-        const data = {};
+        const data = { updatedAt: new Date() };
         if (type)
             data.type = type === 'IN' ? 'IN' : 'OUT';
         if (amount !== undefined)
@@ -158,10 +236,29 @@ router.put('/:id', auth_1.authenticate, async (req, res) => {
             data.receiptPhoto = receiptPhoto || null;
         if (date !== undefined)
             data.date = new Date(date);
-        const updated = await index_1.prisma.cashTransaction.update({
-            where: { id: String(id) },
-            data
-        });
+        const db = getDb();
+        let updated = null;
+        if (db) {
+            try {
+                const query = mongoose_1.default.Types.ObjectId.isValid(id)
+                    ? { $or: [{ _id: new mongoose_1.default.Types.ObjectId(id) }, { id: String(id) }] }
+                    : { id: String(id) };
+                await db.collection('CashTransaction').updateOne(query, { $set: data });
+                updated = await db.collection('CashTransaction').findOne(query);
+                if (updated) {
+                    updated.id = updated._id.toString();
+                }
+            }
+            catch (mErr) {
+                console.warn('Mongoose update failed, falling back to Prisma:', mErr);
+            }
+        }
+        if (!updated) {
+            updated = await index_1.prisma.cashTransaction.update({
+                where: { id: String(id) },
+                data
+            });
+        }
         fastCache_1.fastCache.clearAll();
         res.json(updated);
     }
@@ -174,22 +271,53 @@ router.put('/:id', auth_1.authenticate, async (req, res) => {
 router.delete('/:id', auth_1.authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        const existing = await index_1.prisma.cashTransaction.findUnique({
-            where: { id: String(id) }
-        });
+        const db = getDb();
+        let existing = null;
+        if (db) {
+            try {
+                const query = mongoose_1.default.Types.ObjectId.isValid(id)
+                    ? { $or: [{ _id: new mongoose_1.default.Types.ObjectId(id) }, { id: String(id) }] }
+                    : { id: String(id) };
+                existing = await db.collection('CashTransaction').findOne(query);
+            }
+            catch (mErr) {
+                console.warn('Mongoose findOne error, falling back to Prisma:', mErr);
+            }
+        }
+        if (!existing) {
+            existing = await index_1.prisma.cashTransaction.findUnique({
+                where: { id: String(id) }
+            });
+        }
         if (!existing) {
             return res.status(404).json({ message: 'Transaction not found' });
         }
         // If linked to maintenance, unlink
         if (existing.sourceId && existing.sourceModule === 'maintenance') {
-            await index_1.prisma.machineMaintenance.updateMany({
-                where: { id: existing.sourceId },
-                data: { cashTransactionId: null }
-            }).catch(() => { });
+            if (db) {
+                const mQuery = mongoose_1.default.Types.ObjectId.isValid(existing.sourceId)
+                    ? { $or: [{ _id: new mongoose_1.default.Types.ObjectId(existing.sourceId) }, { id: existing.sourceId }] }
+                    : { id: existing.sourceId };
+                await db.collection('MachineMaintenance').updateMany(mQuery, { $set: { cashTransactionId: null } }).catch(() => { });
+            }
+            else {
+                await index_1.prisma.machineMaintenance.updateMany({
+                    where: { id: existing.sourceId },
+                    data: { cashTransactionId: null }
+                }).catch(() => { });
+            }
         }
-        await index_1.prisma.cashTransaction.delete({
-            where: { id: String(id) }
-        });
+        if (db) {
+            const query = mongoose_1.default.Types.ObjectId.isValid(id)
+                ? { $or: [{ _id: new mongoose_1.default.Types.ObjectId(id) }, { id: String(id) }] }
+                : { id: String(id) };
+            await db.collection('CashTransaction').deleteOne(query);
+        }
+        else {
+            await index_1.prisma.cashTransaction.delete({
+                where: { id: String(id) }
+            });
+        }
         fastCache_1.fastCache.clearAll();
         res.json({ success: true, message: 'Cash transaction deleted' });
     }
