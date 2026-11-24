@@ -72,7 +72,14 @@ export const calculateSlabExistingPiecesArea = (pieces?: any[]): number => {
   if (pieces.length === 1 && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
     return 0;
   }
-  const sum = pieces.reduce((acc, p) => acc + parsePieceAreaSqFt(p.size), 0);
+  // Only pieces that have actually started or completed production constrain the minimum slab size
+  const activePieces = pieces.filter((p: any) => 
+    p.status === 'completed' || p.status === 'active' || p.hasProduction
+  );
+  if (activePieces.length === 0) {
+    return 0;
+  }
+  const sum = activePieces.reduce((acc, p) => acc + parsePieceAreaSqFt(p.size), 0);
   return Math.round(sum * 100) / 100;
 };
 
