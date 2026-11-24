@@ -41,7 +41,7 @@ export const formatProductToSlabSize = (prod: any): string => {
 export const parsePieceAreaSqFt = (sizeStr?: string | null): number => {
   if (!sizeStr) return 0;
   const raw = String(sizeStr);
-  const dimsPart = (raw.split('|')[0] || '').toLowerCase();
+  const dimsPart = (raw.split('|')[0]?.split('(')[0] || '').toLowerCase();
   const lMatch = raw.match(/(\d+(?:\.\d+)?)\s*L/i) || dimsPart.match(/(\d+(?:\.\d+)?)/);
   const wMatch = raw.match(/(\d+(?:\.\d+)?)\s*W/i) || dimsPart.match(/[xX*×]\s*(\d+(?:\.\d+)?)/);
   const l = (lMatch && lMatch[1]) ? parseFloat(lMatch[1]) : 0;
@@ -53,13 +53,13 @@ export const parsePieceAreaSqFt = (sizeStr?: string | null): number => {
   }
 
   if (l > 0 && w > 0) {
-    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
-      return l * w;
-    }
     if (dimsPart.includes('inch') || dimsPart.includes('"')) {
       return (l * w) / 144;
     }
-    if (dimsPart.includes('mm')) {
+    if (dimsPart.includes('feet') || /\bft\b/.test(dimsPart) || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
+      return l * w;
+    }
+    if (/\bmm\b/.test(dimsPart)) {
       return (l * w) / 92903.04;
     }
     return (l * w) / 144;
@@ -72,14 +72,7 @@ export const calculateSlabExistingPiecesArea = (pieces?: any[]): number => {
   if (pieces.length === 1 && String(pieces[0]?.productName || '').includes('(Full Slab)')) {
     return 0;
   }
-  // Only pieces that have actually started or completed production constrain the minimum slab size
-  const activePieces = pieces.filter((p: any) => 
-    p.status === 'completed' || p.status === 'active' || p.hasProduction
-  );
-  if (activePieces.length === 0) {
-    return 0;
-  }
-  const sum = activePieces.reduce((acc, p) => acc + parsePieceAreaSqFt(p.size), 0);
+  const sum = pieces.reduce((acc, p) => acc + parsePieceAreaSqFt(p.size), 0);
   return Math.round(sum * 100) / 100;
 };
 
@@ -91,7 +84,7 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
 
   if (slab.size) {
     const rawSize = String(slab.size);
-    const dimsPart = (rawSize.split('|')[0] || '').toLowerCase();
+    const dimsPart = (rawSize.split('|')[0]?.split('(')[0] || '').toLowerCase();
     const lMatch = rawSize.match(/(\d+(?:\.\d+)?)\s*L/i) || dimsPart.match(/(\d+(?:\.\d+)?)/);
     const wMatch = rawSize.match(/(\d+(?:\.\d+)?)\s*W/i) || dimsPart.match(/[xX*×]\s*(\d+(?:\.\d+)?)/);
     const tMatch = rawSize.match(/\|\s*(\d+(?:\.\d+)?)\s*MM/i) || rawSize.match(/(\d+(?:\.\d+)?)\s*MM/i);
@@ -101,16 +94,16 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
     if (tMatch && tMatch[1]) breadth = parseFloat(tMatch[1]) || 0;
 
     const existingDimUnit = (existingProduct?.dimensionUnit || existingProduct?.unit || '').toLowerCase();
-    if (dimsPart.includes('feet') || dimsPart.includes('ft') || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
-      dimUnit = 'sq_ft';
-    } else if (dimsPart.includes('inch') || dimsPart.includes('"')) {
+    if (dimsPart.includes('inch') || dimsPart.includes('"')) {
       dimUnit = 'inch';
-    } else if (dimsPart.includes('mm')) {
-      dimUnit = 'mm';
-    } else if (existingDimUnit.includes('feet') || existingDimUnit.includes('ft') || existingDimUnit.includes('sq')) {
+    } else if (dimsPart.includes('feet') || /\bft\b/.test(dimsPart) || dimsPart.includes('sq_ft') || dimsPart.includes('sqft')) {
       dimUnit = 'sq_ft';
+    } else if (/\bmm\b/.test(dimsPart)) {
+      dimUnit = 'mm';
     } else if (existingDimUnit.includes('inch') || existingDimUnit.includes('"')) {
       dimUnit = 'inch';
+    } else if (existingDimUnit.includes('feet') || existingDimUnit.includes('ft') || existingDimUnit.includes('sq')) {
+      dimUnit = 'sq_ft';
     } else if (existingDimUnit === 'mm' || existingDimUnit.includes('milli')) {
       dimUnit = 'mm';
     }
@@ -120,7 +113,7 @@ export const parseSlabToProduct = (slab: any, existingProduct?: any) => {
   const isMM = dimUnit === 'mm';
   const sqft = isFt ? l * w : (isMM ? (l * w) / 92903.04 : (l * w) / 144);
 
-  const defaultUnitFromSlab = dimUnit === 'sq_ft' ? 'Sq. Ft' : dimUnit;
+  const defaultUnitFromSlab = dimUnit === 'sq_ft' ? 'Sq. Ft' : (dimUnit === 'mm' ? 'MM' : dimUnit);
   const existingU = (existingProduct?.unit || '').trim();
   const unit = (existingU && existingU.toLowerCase() !== 'pieces' && existingU.toLowerCase() !== 'piece' && existingU.toLowerCase() !== 'pcs')
     ? existingU

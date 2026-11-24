@@ -106,16 +106,13 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
               rawUnit = pUnit;
             }
 
-            // Only infer unit from slab.size if rawUnit is completely missing
-            if (!rawUnit) {
-              const sizeDimsPart = ((slab.size || '').split('|')[0] || '').toLowerCase();
-              if (sizeDimsPart.includes('inch') || sizeDimsPart.includes('"')) {
-                rawUnit = 'inch';
-              } else if (sizeDimsPart.includes('mm')) {
-                rawUnit = 'mm';
-              } else if (sizeDimsPart.includes('(ft)') || sizeDimsPart.includes('ft') || sizeDimsPart.includes('feet') || sizeDimsPart.includes('sq')) {
-                rawUnit = 'feet';
-              }
+            const slabDimsLower = `${(slab.size || '').split('|')[0]?.split('(')[0] || ''} ${(slab.pieces?.[0]?.size || '').split('|')[0]?.split('(')[0] || ''}`.toLowerCase();
+            if (slabDimsLower.includes('inch') || slabDimsLower.includes('"')) {
+              rawUnit = 'inch';
+            } else if (slabDimsLower.includes('(ft)') || slabDimsLower.includes('feet') || /\bft\b/.test(slabDimsLower) || slabDimsLower.includes("'") || slabDimsLower.includes('sq_ft') || slabDimsLower.includes('sqft')) {
+              rawUnit = 'feet';
+            } else if (slabDimsLower.includes('(mm)') || /\bmm\b/.test(slabDimsLower)) {
+              rawUnit = 'mm';
             }
 
             const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft'))
@@ -270,16 +267,13 @@ router.get('/project-hierarchy', authenticate, async (req, res) => {
           rawUnit = pUnit;
         }
 
-        // Only infer unit from slab.size if rawUnit is completely missing
-        if (!rawUnit) {
-          const sizeDimsPart = ((slab.size || '').split('|')[0] || '').toLowerCase();
-          if (sizeDimsPart.includes('inch') || sizeDimsPart.includes('"')) {
-            rawUnit = 'inch';
-          } else if (sizeDimsPart.includes('mm')) {
-            rawUnit = 'mm';
-          } else if (sizeDimsPart.includes('(ft)') || sizeDimsPart.includes('ft') || sizeDimsPart.includes('feet') || sizeDimsPart.includes('sq')) {
-            rawUnit = 'feet';
-          }
+        const slabDimsLower = `${(slab.size || '').split('|')[0]?.split('(')[0] || ''} ${(slab.pieces?.[0]?.size || '').split('|')[0]?.split('(')[0] || ''}`.toLowerCase();
+        if (slabDimsLower.includes('inch') || slabDimsLower.includes('"')) {
+          rawUnit = 'inch';
+        } else if (slabDimsLower.includes('(ft)') || slabDimsLower.includes('feet') || /\bft\b/.test(slabDimsLower) || slabDimsLower.includes("'") || slabDimsLower.includes('sq_ft') || slabDimsLower.includes('sqft')) {
+          rawUnit = 'feet';
+        } else if (slabDimsLower.includes('(mm)') || /\bmm\b/.test(slabDimsLower)) {
+          rawUnit = 'mm';
         }
 
         const slabUnit = (rawUnit === 'sq_ft' || rawUnit === 'sqft' || rawUnit === 'sq. ft' || rawUnit === 'feet' || rawUnit === 'ft' || rawUnit.includes('sq') || rawUnit.includes('ft')) 
@@ -605,9 +599,10 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
               if (lMatch && wMatch) {
                 const lNum = parseFloat(lMatch[1] || '0');
                 const wNum = parseFloat(wMatch[1] || '0');
-                const parentLower = parentSlabSize.toLowerCase();
-                const isParentMM = parentLower.includes('mm') && !parentLower.includes('inch') && !parentLower.includes('feet');
-                const isParentFt = parentLower.includes('feet') || parentLower.includes('ft');
+                const parentDimsLower = (parentSlabSize.split('|')[0]?.split('(')[0] || '').toLowerCase();
+                const isParentInch = parentDimsLower.includes('inch') || parentDimsLower.includes('"');
+                const isParentFt = !isParentInch && (parentDimsLower.includes('feet') || /\bft\b/.test(parentDimsLower) || parentDimsLower.includes("'") || parentDimsLower.includes('sq_ft') || parentDimsLower.includes('sqft'));
+                const isParentMM = !isParentInch && !isParentFt && /\bmm\b/.test(parentDimsLower);
                 const repairedUnit = isParentMM ? 'MM' : (isParentFt ? 'Feet' : 'Inch');
                 const repairedArea = isParentMM ? ((lNum * wNum) / 92903.04) : (isParentFt ? (lNum * wNum) : ((lNum * wNum) / 144));
                 if (repairedArea <= parentSlabArea + 0.05) {
@@ -653,11 +648,11 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
           pieceMap.get(sKey).push(pObj);
         });
 
-        // Changes 1 & 2: Auto-create 1 inside piece for any single slab that has 0 pieces
+        // Changes 1 & 2: Auto-create 1 inside piece for any single slab that has 0 pieces (unless user cleared it to break into custom pieces)
         for (const s of rawSlabs) {
           const sKey = s._id.toString();
           const existingPieces = pieceMap.get(sKey) || [];
-          if (existingPieces.length === 0) {
+          if (existingPieces.length === 0 && !s.skipAutoDefaultPiece) {
             const isSlabCompleted = s.status === 'completed' || s.status === 'approved';
             const newPieceId = new mongoose.Types.ObjectId();
             const pieceName = `${s.name || 'Slab'}.1`;
@@ -737,15 +732,24 @@ router.get('/project/:projectId', authenticate, async (req, res) => {
               }
             });
           }
-          // Auto-heal slab whose size is MM but either missing unit or erroneously labeled Inch
+          // Auto-heal slab whose size is missing unit ONLY when no explicit Inch/Feet unit is present
+          const rawSlabDims = ((s.size || '').split('|')[0]?.split('(')[0] || '').toLowerCase();
+          const hasExplicitNonMMUnit =
+            rawSlabDims.includes('inch') ||
+            rawSlabDims.includes('"') ||
+            rawSlabDims.includes('feet') ||
+            /\bft\b/.test(rawSlabDims) ||
+            rawSlabDims.includes("'") ||
+            rawSlabDims.includes('sq');
+          const hasExplicitMMUnit = /\bmm\b/.test(rawSlabDims);
           const lMatch = (s.size || '').match(/([\d.]+)\s*L/i);
           const wMatch = (s.size || '').match(/([\d.]+)\s*W/i);
           const tMatch = (s.size || '').match(/\|\s*([\d.]+)\s*MM/i) || (s.size || '').match(/([\d.]+)\s*MM/i);
-          if (lMatch && wMatch) {
+          if (!hasExplicitNonMMUnit && lMatch && wMatch) {
             const lVal = parseFloat(lMatch[1] || '0');
             const wVal = parseFloat(wMatch[1] || '0');
             const tVal = tMatch ? tMatch[1] : '18';
-            if (lVal > 150 || wVal > 150) {
+            if ((hasExplicitMMUnit || lVal > 150 || wVal > 150) && !s.size?.includes('Sq.Ft')) {
               const mmSqFt = ((lVal * wVal) / 92903.04).toFixed(2);
               const properSize = `${lVal}L x ${wVal}W MM | ${tVal}MM (${mmSqFt} Sq.Ft)`;
               if (s.size !== properSize) {
@@ -1125,23 +1129,82 @@ router.post('/', authenticate, async (req, res) => {
 router.post('/:id/pieces', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { count, productName, vendorName, size, piecesArray, replaceExisting } = req.body;
+    const { count, productName, vendorName, size, piecesArray, replaceExisting, replaceDefaultOnly } = req.body;
     
     const slab = await prisma.slab.findUnique({ where: { id: String(id) }, include: { pieces: true } });
     if (!slab) return res.status(404).json({ message: 'Slab not found' });
-    
-    // If replaceExisting is true (e.g. Breaking full slab into pieces), clean up previous unstarted full slab piece(s)
-    if (replaceExisting) {
-      const unstartedPieces = (slab.pieces || []).filter((p: any) => 
-        !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started' || String(p.productName || '').includes('(Full Slab)')
-      );
-      if (unstartedPieces.length > 0) {
-        const unstartedIds = unstartedPieces.map((p: any) => (p.id || p._id)?.toString()).filter(Boolean);
-        if (unstartedIds.length > 0) {
-          await prisma.pieceLog.deleteMany({ where: { pieceId: { in: unstartedIds } } }).catch(() => {});
-          await prisma.piece.deleteMany({ where: { id: { in: unstartedIds } } }).catch(() => {});
+
+    const slabArea = Math.round(parsePieceAreaSqFt(slab.size) * 100) / 100;
+    const isSingleFullSlabRequest = Array.isArray(piecesArray) && piecesArray.length === 1 && String(piecesArray[0]?.name || '').includes('(Full Slab)');
+
+    // Determine which old unstarted/default piece(s) to replace
+    let idsToRemove: string[] = [];
+    if (replaceDefaultOnly) {
+      const currentPieces = slab.pieces || [];
+      const defaultPieces = currentPieces.filter((p: any) => {
+        const isPending = !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started';
+        if (!isPending) return false;
+        if (String(p.productName || '').includes('(Full Slab)')) return true;
+        if (currentPieces.length === 1) {
+          const pArea = Math.round(parsePieceAreaSqFt(p.size) * 100) / 100;
+          return String(p.productName || '').trim() === `${slab.name}.1` || (slabArea > 0 && Math.abs(pArea - slabArea) <= 0.15);
         }
+        return false;
+      });
+      idsToRemove = defaultPieces.map((p: any) => p.id);
+    } else if (replaceExisting) {
+      const unstartedPieces = (slab.pieces || []).filter((p: any) => 
+        !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started'
+      );
+      idsToRemove = unstartedPieces.map((p: any) => p.id);
+    }
+
+    const remainingPieces = (slab.pieces || []).filter((p: any) => !idsToRemove.includes(p.id));
+    const existingPiecesArea = Math.round(
+      remainingPieces.reduce((sum: number, p: any) => sum + parsePieceAreaSqFt(p.size), 0) * 100
+    ) / 100;
+
+    // Calculate total incoming piece area BEFORE modifying DB
+    let newPiecesTotalArea = 0;
+    if (piecesArray && Array.isArray(piecesArray)) {
+      for (const item of piecesArray) {
+        let pArea = 0;
+        if (item.size) {
+          pArea = parsePieceAreaSqFt(item.size);
+        }
+        if (pArea <= 0) {
+          const l = Number(item.length) || 0;
+          const w = Number(item.width) || 0;
+          const pUnit = String(item.unit || '').toLowerCase().trim();
+          if (l > 0 && w > 0) {
+            if (pUnit === 'feet' || pUnit === 'ft' || pUnit === 'sq_ft' || pUnit === 'sqft' || pUnit === 'sq.ft' || pUnit === 'sq. ft') {
+              pArea = l * w;
+            } else if (pUnit === 'mm') {
+              pArea = (l * w) / 92903.04;
+            } else {
+              pArea = (l * w) / 144;
+            }
+          }
+        }
+        newPiecesTotalArea += pArea;
       }
+    } else if (Number(count) > 0 && size) {
+      newPiecesTotalArea = parsePieceAreaSqFt(size) * Number(count);
+    }
+    newPiecesTotalArea = Math.round(newPiecesTotalArea * 100) / 100;
+
+    const combinedArea = Math.round((existingPiecesArea + newPiecesTotalArea) * 100) / 100;
+    if (!isSingleFullSlabRequest && slabArea > 0 && combinedArea > slabArea + 0.05) {
+      const remainingLimit = Math.max(0, Math.round((slabArea - existingPiecesArea) * 100) / 100);
+      return res.status(400).json({
+        message: `Total piece area (${combinedArea.toFixed(2)} Sq.Ft) exceeds main slab limit (${slabArea.toFixed(2)} Sq.Ft). Remaining available area is ${remainingLimit.toFixed(2)} Sq.Ft.`
+      });
+    }
+
+    // Now safe to delete replaced unstarted/default piece(s)
+    if (idsToRemove.length > 0) {
+      await prisma.pieceLog.deleteMany({ where: { pieceId: { in: idsToRemove } } }).catch(() => {});
+      await prisma.piece.deleteMany({ where: { id: { in: idsToRemove } } }).catch(() => {});
     }
 
     let projectMaterial = null;
@@ -1164,10 +1227,6 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
       projectMaterial = matched;
     }
 
-    const remainingPieces = replaceExisting 
-      ? await prisma.piece.findMany({ where: { slabId: String(id) } })
-      : (slab.pieces || []);
-
     const currentMaxPieceNumber = remainingPieces.length > 0 
       ? Math.max(...remainingPieces.map((p: any) => p.pieceNumber || 0)) 
       : 0;
@@ -1178,9 +1237,9 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
         const l = Number(piecesArray[i].length) || 0;
         const w = Number(piecesArray[i].width) || 0;
         const pUnit = String(piecesArray[i].unit || '').toLowerCase();
-        let pieceArea = 0;
-        if (l > 0 && w > 0) {
-          if (pUnit === 'feet' || pUnit === 'ft' || pUnit === 'sq_ft' || pUnit === 'sqft') {
+        let pieceArea = piecesArray[i].size ? parsePieceAreaSqFt(piecesArray[i].size) : 0;
+        if (pieceArea <= 0 && l > 0 && w > 0) {
+          if (pUnit === 'feet' || pUnit === 'ft' || pUnit === 'sq_ft' || pUnit === 'sqft' || pUnit === 'sq.ft' || pUnit === 'sq. ft') {
             pieceArea = l * w;
           } else if (pUnit === 'mm') {
             pieceArea = (l * w) / 92903.04;
@@ -1223,6 +1282,17 @@ router.post('/:id/pieces', authenticate, async (req, res) => {
     }
     
     await prisma.piece.createMany({ data: piecesData });
+
+    try {
+      const mongoose = require('mongoose');
+      const db = mongoose.connection?.db;
+      if (db && mongoose.Types.ObjectId.isValid(id)) {
+        await db.collection('Slab').updateOne(
+          { _id: new mongoose.Types.ObjectId(String(id)) },
+          { $set: { skipAutoDefaultPiece: false } }
+        );
+      }
+    } catch (_) {}
     
     if (projectMaterial) {
        const wasteQuantity = Math.max(0, projectMaterial.quantity - usedQuantity);
@@ -1265,9 +1335,18 @@ router.put('/:id', authenticate, async (req, res) => {
         include: { pieces: true }
       });
       if (existingSlabWithPieces) {
+        const onlyPiece = existingSlabWithPieces.pieces?.length === 1 ? existingSlabWithPieces.pieces[0] : null;
+        const isOnlyUntouchedDefault = Boolean(
+          onlyPiece && (
+            String(onlyPiece.productName || '').includes('(Full Slab)') ||
+            ((!onlyPiece.status || onlyPiece.status === 'pending' || onlyPiece.status === 'not_started') &&
+              (String(onlyPiece.productName || '').trim() === `${existingSlabWithPieces.name}.1` ||
+                onlyPiece.size === existingSlabWithPieces.size))
+          )
+        );
         const hasCustomPieces = Array.isArray(existingSlabWithPieces.pieces) &&
           existingSlabWithPieces.pieces.length > 0 &&
-          !(existingSlabWithPieces.pieces.length === 1 && String(existingSlabWithPieces.pieces[0]?.productName || '').includes('(Full Slab)'));
+          !isOnlyUntouchedDefault;
 
         if (hasCustomPieces && size !== existingSlabWithPieces.size) {
           return res.status(400).json({
@@ -1610,6 +1689,11 @@ router.post('/piece/:id/unlink-raw-block', authenticate, async (req, res) => {
 router.delete('/piece/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
+
+    const existingPiece = await prisma.piece.findUnique({
+      where: { id: String(id) },
+      select: { id: true, slabId: true }
+    }).catch(() => null);
     
     // First delete associated logs
     await prisma.pieceLog.deleteMany({
@@ -1633,6 +1717,25 @@ router.delete('/piece/:id', authenticate, async (req, res) => {
     await prisma.piece.deleteMany({
       where: { id: String(id) }
     }).catch(e => console.error(e));
+
+    // If this left 0 pieces in the parent slab, prevent GET /project/:projectId from auto-recreating a ghost default piece
+    if (existingPiece?.slabId) {
+      try {
+        const remainingCount = await prisma.piece.count({
+          where: { slabId: existingPiece.slabId }
+        });
+        if (remainingCount === 0) {
+          const mongoose = require('mongoose');
+          const db = mongoose.connection?.db;
+          if (db && mongoose.Types.ObjectId.isValid(existingPiece.slabId)) {
+            await db.collection('Slab').updateOne(
+              { _id: new mongoose.Types.ObjectId(existingPiece.slabId) },
+              { $set: { skipAutoDefaultPiece: true } }
+            );
+          }
+        }
+      } catch (_) {}
+    }
 
     fastCache.invalidate('slabs_project_');
     fastCache.invalidate('all_projects');
