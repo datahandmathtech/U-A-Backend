@@ -93,12 +93,16 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                         else if (pUnit) {
                             rawUnit = pUnit;
                         }
-                        const sizeLower = `${slab.size || ''} ${slab.pieces?.[0]?.size || ''}`.toLowerCase();
-                        if (!rawUnit || rawUnit === 'inch') {
-                            if (sizeLower.includes('(mm)') || sizeLower.includes('mm')) {
+                        // Only infer unit from slab.size if rawUnit is completely missing
+                        if (!rawUnit) {
+                            const sizeDimsPart = ((slab.size || '').split('|')[0] || '').toLowerCase();
+                            if (sizeDimsPart.includes('inch') || sizeDimsPart.includes('"')) {
+                                rawUnit = 'inch';
+                            }
+                            else if (sizeDimsPart.includes('mm')) {
                                 rawUnit = 'mm';
                             }
-                            else if (sizeLower.includes('(ft)') || sizeLower.includes('ft') || sizeLower.includes('feet')) {
+                            else if (sizeDimsPart.includes('(ft)') || sizeDimsPart.includes('ft') || sizeDimsPart.includes('feet') || sizeDimsPart.includes('sq')) {
                                 rawUnit = 'feet';
                             }
                         }
@@ -239,12 +243,16 @@ router.get('/project-hierarchy', authMiddleware_1.authenticate, async (req, res)
                 else if (pUnit) {
                     rawUnit = pUnit;
                 }
-                const sizeLower = `${slab.size || ''} ${slab.pieces?.[0]?.size || ''}`.toLowerCase();
-                if (!rawUnit || rawUnit === 'inch') {
-                    if (sizeLower.includes('(mm)') || sizeLower.includes('mm')) {
+                // Only infer unit from slab.size if rawUnit is completely missing
+                if (!rawUnit) {
+                    const sizeDimsPart = ((slab.size || '').split('|')[0] || '').toLowerCase();
+                    if (sizeDimsPart.includes('inch') || sizeDimsPart.includes('"')) {
+                        rawUnit = 'inch';
+                    }
+                    else if (sizeDimsPart.includes('mm')) {
                         rawUnit = 'mm';
                     }
-                    else if (sizeLower.includes('(ft)') || sizeLower.includes('ft') || sizeLower.includes('feet')) {
+                    else if (sizeDimsPart.includes('(ft)') || sizeDimsPart.includes('ft') || sizeDimsPart.includes('feet') || sizeDimsPart.includes('sq')) {
                         rawUnit = 'feet';
                     }
                 }
@@ -1026,11 +1034,13 @@ router.post('/:id/pieces', authMiddleware_1.authenticate, async (req, res) => {
             return res.status(404).json({ message: 'Slab not found' });
         // If replaceExisting is true (e.g. Breaking full slab into pieces), clean up previous unstarted full slab piece(s)
         if (replaceExisting) {
-            const unstartedPieces = (slab.pieces || []).filter((p) => !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started');
+            const unstartedPieces = (slab.pieces || []).filter((p) => !p.status || p.status === 'pending' || p.status === 'not_started' || p.status === 'Not Started' || String(p.productName || '').includes('(Full Slab)'));
             if (unstartedPieces.length > 0) {
-                const unstartedIds = unstartedPieces.map((p) => p.id);
-                await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: unstartedIds } } }).catch(() => { });
-                await index_1.prisma.piece.deleteMany({ where: { id: { in: unstartedIds } } }).catch(() => { });
+                const unstartedIds = unstartedPieces.map((p) => (p.id || p._id)?.toString()).filter(Boolean);
+                if (unstartedIds.length > 0) {
+                    await index_1.prisma.pieceLog.deleteMany({ where: { pieceId: { in: unstartedIds } } }).catch(() => { });
+                    await index_1.prisma.piece.deleteMany({ where: { id: { in: unstartedIds } } }).catch(() => { });
+                }
             }
         }
         let projectMaterial = null;
