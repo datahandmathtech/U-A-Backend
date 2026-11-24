@@ -272,10 +272,6 @@ export const syncSlabsAndQuotationFromProducts = async (
           matched.pieces.length > 0 &&
           !(matched.pieces.length === 1 && String(matched.pieces[0]?.productName || '').includes('(Full Slab)'));
 
-        if (hasCustomPieces && matched.size !== sizeFormatted) {
-          throw new Error(`Cannot change size of slab "${rawName}" because inside pieces exist. Please delete inside pieces first.`);
-        }
-
         const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
         if (existingPiecesArea > 0 && normProd.sqft > 0 && normProd.sqft + 0.01 < existingPiecesArea) {
           throw new Error(`Cannot reduce size of "${rawName}" to ${normProd.sqft.toFixed(2)} Sq.Ft because its inside pieces already total ${existingPiecesArea.toFixed(2)} Sq.Ft.`);
@@ -316,14 +312,6 @@ export const syncSlabsAndQuotationFromProducts = async (
           matched = currentSlabs.find(s => !matchedSlabIds.has(s.id) && (s.id === normProd.id || s.name.trim().toLowerCase() === rawName.toLowerCase()));
         }
         if (matched) {
-          const hasCustomPieces = Array.isArray(matched.pieces) &&
-            matched.pieces.length > 0 &&
-            !(matched.pieces.length === 1 && String(matched.pieces[0]?.productName || '').includes('(Full Slab)'));
-
-          if (hasCustomPieces && matched.size !== sizeFormatted) {
-            throw new Error(`Cannot change size of slab "${pieceSlabName}" because inside pieces exist. Please delete inside pieces first.`);
-          }
-
           const singleSlabSqFt = normProd.sqft; // normProd.sqft is already the single piece area
           const existingPiecesArea = calculateSlabExistingPiecesArea(matched.pieces);
           if (existingPiecesArea > 0 && singleSlabSqFt > 0 && singleSlabSqFt + 0.01 < existingPiecesArea) {
