@@ -4,6 +4,7 @@ const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
 const fastCache_1 = require("../utils/fastCache");
+const dashboardChatHelpers_1 = require("../utils/dashboardChatHelpers");
 const router = (0, express_1.Router)();
 router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
     try {
@@ -12,41 +13,30 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         const cached = fastCache_1.fastCache.get(cacheKey);
         if (cached)
             return res.json(cached);
-        let prismaDateFilter = {};
-        let mongoDateFilter = {};
-        let prismaExpenseFilter = {};
-        let mongoExpenseFilter = {};
-        if (fy && typeof fy === 'string') {
-            const startYear = parseInt(fy.split('-')[0]);
-            const endYear = parseInt(fy.split('-')[1]);
-            let startDate, endDate;
-            if (month && month !== '') {
-                const monthNum = parseInt(month);
-                const year = (monthNum >= 3 && monthNum <= 11) ? startYear : endYear;
-                startDate = new Date(year, monthNum, 1);
-                endDate = new Date(year, monthNum + 1, 0, 23, 59, 59, 999);
-            }
-            else {
-                startDate = new Date(startYear, 3, 1);
-                endDate = new Date(endYear, 2, 31, 23, 59, 59, 999);
-            }
-            prismaDateFilter = {
-                createdAt: {
-                    gte: startDate,
-                    lte: endDate
-                }
-            };
-            mongoDateFilter = {
-                createdAt: {
-                    $gte: startDate,
-                    $lte: endDate
-                }
-            };
-            prismaExpenseFilter = { date: prismaDateFilter.createdAt };
-            mongoExpenseFilter = {
+        let prismaFyFilter = {};
+        let mongoFyFilter = {};
+        let prismaMonthExpenseFilter = {};
+        let mongoMonthExpenseFilter = {};
+        let prismaMonthMaintFilter = {};
+        let mongoMonthMaintFilter = {};
+        const { fyRangeStart, fyRangeEnd, monthRangeStart, monthRangeEnd } = (0, dashboardChatHelpers_1.computeDashboardDateRanges)(typeof fy === 'string' ? fy : null, typeof month === 'string' ? month : null);
+        if (fyRangeStart && fyRangeEnd && monthRangeStart && monthRangeEnd) {
+            // Top 4 Cards: Full Financial Year window
+            prismaFyFilter = { createdAt: { gte: fyRangeStart, lte: fyRangeEnd } };
+            mongoFyFilter = { createdAt: { $gte: fyRangeStart, $lte: fyRangeEnd } };
+            // Bottom 4 Cards: Selected Month window inside the Financial Year
+            prismaMonthExpenseFilter = { date: { gte: monthRangeStart, lte: monthRangeEnd } };
+            mongoMonthExpenseFilter = {
                 $or: [
-                    { date: mongoDateFilter.createdAt },
-                    { createdAt: mongoDateFilter.createdAt }
+                    { date: { $gte: monthRangeStart, $lte: monthRangeEnd } },
+                    { $and: [{ date: { $exists: false } }, { createdAt: { $gte: monthRangeStart, $lte: monthRangeEnd } }] }
+                ]
+            };
+            prismaMonthMaintFilter = { serviceDate: { gte: monthRangeStart, lte: monthRangeEnd } };
+            mongoMonthMaintFilter = {
+                $or: [
+                    { serviceDate: { $gte: monthRangeStart, $lte: monthRangeEnd } },
+                    { $and: [{ serviceDate: { $exists: false } }, { createdAt: { $gte: monthRangeStart, $lte: monthRangeEnd } }] }
                 ]
             };
         }
@@ -54,18 +44,39 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         let invoices = [];
         let laborContracts = [];
         let expenses = [];
+        let maintenances = [];
         let electricity = [];
+        let rawClosures = [];
+        let rawSlabs = [];
+        let rawPieces = [];
+        let rawPieceLogs = [];
         const mongoose = require('mongoose');
         let db = mongoose.connection?.db;
         let dbSuccess = false;
         if (db) {
             try {
-                [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-                    db.collection('Project').find(mongoDateFilter, { projection: { status: 1 } }).toArray(),
-                    db.collection('Invoice').find(mongoDateFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
-                    db.collection('LaborContract').find(mongoDateFilter, { projection: { totalAmount: 1 } }).toArray(),
-                    db.collection('Expense').find(mongoExpenseFilter, { projection: { amount: 1 } }).toArray(),
-                    db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray()
+                [
+                    projects,
+                    invoices,
+                    laborContracts,
+                    expenses,
+                    maintenances,
+                    electricity,
+                    rawClosures,
+                    rawSlabs,
+                    rawPieces,
+                    rawPieceLogs
+                ] = await Promise.all([
+                    db.collection('Project').find(mongoFyFilter, { projection: { status: 1, progressPercentage: 1 } }).toArray(),
+                    db.collection('Invoice').find(mongoFyFilter, { projection: { totalAmount: 1, advancePaid: 1, balanceAmount: 1 } }).toArray(),
+                    db.collection('LaborContract').find(mongoFyFilter, { projection: { totalAmount: 1 } }).toArray(),
+                    db.collection('Expense').find(mongoMonthExpenseFilter, { projection: { amount: 1 } }).toArray(),
+                    db.collection('MachineMaintenance').find(mongoMonthMaintFilter, { projection: { amount: 1 } }).toArray(),
+                    db.collection('ElectricityLog').find({}, { projection: { month: 1, totalBill: 1 } }).toArray(),
+                    db.collection('ProjectClosure').find({}, { projection: { projectId: 1, status: 1 } }).toArray(),
+                    db.collection('Slab').find({}, { projection: { projectId: 1, status: 1, requiredStages: 1 } }).toArray(),
+                    db.collection('Piece').find({}, { projection: { slabId: 1, stage: 1, status: 1 } }).toArray(),
+                    db.collection('PieceLog').find({}, { projection: { pieceId: 1, stage: 1, status: 1 } }).toArray()
                 ]);
                 dbSuccess = true;
             }
@@ -74,13 +85,72 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
             }
         }
         if (!dbSuccess) {
-            [projects, invoices, laborContracts, expenses, electricity] = await Promise.all([
-                index_1.prisma.project.findMany({ where: prismaDateFilter, select: { status: true } }),
-                index_1.prisma.invoice.findMany({ where: prismaDateFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
-                index_1.prisma.laborContract.findMany({ where: prismaDateFilter, select: { totalAmount: true } }),
-                index_1.prisma.expense.findMany({ where: prismaExpenseFilter, select: { amount: true } }),
+            [projects, invoices, laborContracts, expenses, maintenances, electricity] = await Promise.all([
+                index_1.prisma.project.findMany({
+                    where: prismaFyFilter,
+                    select: {
+                        id: true,
+                        status: true,
+                        progressPercentage: true,
+                        projectClosure: { select: { id: true, status: true } },
+                        slabs: {
+                            select: {
+                                id: true,
+                                status: true,
+                                requiredStages: true,
+                                pieces: {
+                                    select: {
+                                        id: true,
+                                        stage: true,
+                                        status: true,
+                                        logs: { select: { stage: true, status: true } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+                index_1.prisma.invoice.findMany({ where: prismaFyFilter, select: { totalAmount: true, advancePaid: true, balanceAmount: true } }),
+                index_1.prisma.laborContract.findMany({ where: prismaFyFilter, select: { totalAmount: true } }),
+                index_1.prisma.expense.findMany({ where: prismaMonthExpenseFilter, select: { amount: true } }),
+                index_1.prisma.machineMaintenance.findMany({ where: prismaMonthMaintFilter, select: { amount: true } }),
                 index_1.prisma.electricityLog.findMany({ select: { month: true, totalBill: true } })
             ]);
+        }
+        const closedIds = new Set();
+        const slabsByProject = new Map();
+        const piecesBySlab = new Map();
+        const logsByPiece = new Map();
+        if (dbSuccess) {
+            for (const c of rawClosures) {
+                if (c.projectId && (!c.status || c.status === 'closed')) {
+                    closedIds.add(c.projectId.toString());
+                }
+            }
+            for (const s of rawSlabs) {
+                const pId = s.projectId ? s.projectId.toString() : '';
+                if (!pId)
+                    continue;
+                if (!slabsByProject.has(pId))
+                    slabsByProject.set(pId, []);
+                slabsByProject.get(pId).push(s);
+            }
+            for (const pc of rawPieces) {
+                const sId = pc.slabId ? pc.slabId.toString() : '';
+                if (!sId)
+                    continue;
+                if (!piecesBySlab.has(sId))
+                    piecesBySlab.set(sId, []);
+                piecesBySlab.get(sId).push(pc);
+            }
+            for (const lg of rawPieceLogs) {
+                const pcId = lg.pieceId ? lg.pieceId.toString() : '';
+                if (!pcId)
+                    continue;
+                if (!logsByPiece.has(pcId))
+                    logsByPiece.set(pcId, []);
+                logsByPiece.get(pcId).push(lg);
+            }
         }
         let totalLeads = 0;
         let activeProjects = 0;
@@ -88,31 +158,44 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         let readyForDispatch = 0;
         let completedProjects = 0;
         for (const p of projects) {
-            if (['enquiry', 'design_sharing', 'quotation', 'advance_payment'].includes(p.status))
+            const pId = p._id ? p._id.toString() : String(p.id || '');
+            if (!dbSuccess && p.projectClosure && (!p.projectClosure.status || p.projectClosure.status === 'closed')) {
+                closedIds.add(pId);
+            }
+            if (['pending', 'enquiry', 'design_sharing', 'quotation', 'advance_payment'].includes(p.status)) {
                 totalLeads++;
-            if (['shop_drawing', 'material_planning', 'production', 'work_order'].includes(p.status))
-                activeProjects++;
-            if (p.status === 'quotation')
+            }
+            if (p.status === 'quotation') {
                 pendingQuotations++;
-            if (p.status === 'completed') {
-                readyForDispatch++;
-                completedProjects++;
+            }
+            if (['shop_drawing', 'material_planning', 'production', 'work_order', 'completed'].includes(p.status)) {
+                const projSlabs = dbSuccess ? (slabsByProject.get(pId) || []) : (p.slabs || []);
+                const isDone = (0, dashboardChatHelpers_1.isWorkOrder100PercentDone)(p, closedIds, projSlabs, piecesBySlab, logsByPiece);
+                if (isDone) {
+                    readyForDispatch++;
+                    completedProjects++;
+                }
+                else {
+                    activeProjects++;
+                }
             }
         }
         const totalRevenue = invoices.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
         const advancePaidTotal = invoices.reduce((acc, curr) => acc + (curr.advancePaid || 0), 0);
         const pendingInvoicesTotal = invoices.reduce((acc, curr) => acc + (curr.balanceAmount || 0), 0);
         const laborCost = laborContracts.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
-        const factoryExpenses = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0);
-        // Calculate Petty Cash in hand from CashTransaction (synced with Cash Book)
+        const generalExpenses = expenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const maintenanceExpenses = maintenances.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+        const factoryExpenses = Math.round((generalExpenses + maintenanceExpenses) * 100) / 100;
+        // Bottom 4 (1/4): Petty Cash in hand from CashTransaction for the selected Month
         let pettyCashInHand = 0;
         try {
             let cashTransactions = [];
             if (db) {
-                cashTransactions = await db.collection('CashTransaction').find({}).toArray();
+                cashTransactions = await db.collection('CashTransaction').find(mongoMonthExpenseFilter).toArray();
             }
             else {
-                cashTransactions = await index_1.prisma.cashTransaction.findMany();
+                cashTransactions = await index_1.prisma.cashTransaction.findMany({ where: prismaMonthExpenseFilter });
             }
             if (cashTransactions && cashTransactions.length > 0) {
                 const inSum = cashTransactions.filter((c) => c.type === 'IN').reduce((acc, c) => acc + (Number(c.amount) || 0), 0);
@@ -123,23 +206,48 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
         catch (e) {
             console.warn('Failed to query CashTransaction:', e);
         }
-        // Calculate Material Inward / Outward for current month (in piece quantity)
-        const nowMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+        // Bottom 4 (2/4 & 4/4): Vendor In/Out Material Ledger totals for the selected Month
+        let matStart = monthRangeStart;
+        let matEnd = monthRangeEnd;
+        if (!matStart || !matEnd) {
+            const now = new Date();
+            matStart = new Date(now.getFullYear(), now.getMonth(), 1);
+            matEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        }
         let materialLogs = [];
         try {
             if (db) {
-                materialLogs = await db.collection('ProductionLog').find({ createdAt: { $gte: nowMonthStart } }).toArray();
+                materialLogs = await db.collection('ProductionLog').find({
+                    createdAt: { $gte: matStart, $lte: matEnd },
+                    transactionType: { $in: ['IN', 'OUT'] },
+                    approvalStatus: { $ne: 'rejected' },
+                    $or: [
+                        { assigneeType: 'vendor' },
+                        { vendorId: { $exists: true, $ne: null } }
+                    ]
+                }).toArray();
             }
             else {
-                materialLogs = await index_1.prisma.productionLog.findMany({ where: { createdAt: { gte: nowMonthStart } } });
+                materialLogs = await index_1.prisma.productionLog.findMany({
+                    where: {
+                        createdAt: { gte: matStart, lte: matEnd },
+                        transactionType: { in: ['IN', 'OUT'] },
+                        approvalStatus: { not: 'rejected' },
+                        vendorId: { not: null }
+                    }
+                });
             }
         }
         catch (e) {
-            console.warn('Failed to query ProductionLog for month material:', e);
+            console.warn('Failed to query ProductionLog for Month material:', e);
         }
         let outwardSum = 0;
         let inwardSum = 0;
         for (const log of materialLogs) {
+            if (log.assigneeType !== 'vendor' && !log.vendorId)
+                continue;
+            if (log.approvalStatus === 'rejected')
+                continue;
             const qty = Math.round(Number(log.quantityProduced) || 0);
             if (log.transactionType === 'OUT')
                 outwardSum += qty;
@@ -155,9 +263,6 @@ router.get('/summary', authMiddleware_1.authenticate, async (req, res) => {
             const eMonth = parseInt(e.month.split('-')[1]) - 1; // 0-11
             const startYear = parseInt(fy.split('-')[0]);
             const endYear = parseInt(fy.split('-')[1]);
-            if (month && month !== '') {
-                return eYear === ((parseInt(month) >= 3 && parseInt(month) <= 11) ? startYear : endYear) && eMonth === parseInt(month);
-            }
             if (eMonth >= 3)
                 return eYear === startYear;
             return eYear === endYear;

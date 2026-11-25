@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const projectSync_1 = require("../utils/projectSync");
 const router = (0, express_1.Router)();
 // Get Project Closures
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -35,6 +36,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
             where: { id: projectId },
             data: { status: 'completed' }
         });
+        (0, projectSync_1.invalidateProjectCaches)(projectId);
         res.status(201).json(newClosure);
     }
     catch (error) {

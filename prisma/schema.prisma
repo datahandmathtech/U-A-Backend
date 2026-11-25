@@ -631,21 +631,29 @@ model PackingItem {
   updatedAt   DateTime @updatedAt
 }
 
+type ChatReadReceipt {
+  userId   String
+  userName String
+  userRole String
+  seenAt   DateTime @default(now())
+}
+
 model ProductMessage {
-  id            String    @id @default(auto()) @map("_id") @db.ObjectId
-  slabId        String    @db.ObjectId
-  slab          Slab      @relation(fields: [slabId], references: [id], onDelete: Cascade)
-  projectId     String    @db.ObjectId
-  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  senderId      String?   @db.ObjectId
+  id            String            @id @default(auto()) @map("_id") @db.ObjectId
+  slabId        String            @db.ObjectId
+  slab          Slab              @relation(fields: [slabId], references: [id], onDelete: Cascade)
+  projectId     String            @db.ObjectId
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  senderId      String?           @db.ObjectId
   senderName    String
-  senderRole    String    @default("employee")
+  senderRole    String            @default("employee")
   message       String
-  attachments   String[]  @default([])
-  isReadByAdmin Boolean   @default(false)
+  attachments   String[]          @default([])
+  isReadByAdmin Boolean           @default(false)
   readAt        DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  readBy        ChatReadReceipt[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   @@index([slabId])
   @@index([projectId])

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { invalidateProjectCaches } from '../utils/projectSync';
 
 const router = Router();
 
@@ -37,7 +38,8 @@ router.post('/', authenticate, async (req, res) => {
       where: { id: projectId },
       data: { status: 'completed' }
     });
-    
+
+    invalidateProjectCaches(projectId);
     res.status(201).json(newClosure);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating project closure' });

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../index';
 import { authenticate } from '../middlewares/authMiddleware';
+import { fastCache } from '../utils/fastCache';
 
 const router = Router();
 
@@ -33,6 +34,7 @@ router.post('/', authenticate, async (req, res) => {
       }
     });
     
+    fastCache.invalidate('dashboard_summary');
     res.status(201).json(newExpense);
   } catch (error) {
     res.status(500).json({ message: 'Server error creating expense' });

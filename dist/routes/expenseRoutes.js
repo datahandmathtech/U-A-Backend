@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const index_1 = require("../index");
 const authMiddleware_1 = require("../middlewares/authMiddleware");
+const fastCache_1 = require("../utils/fastCache");
 const router = (0, express_1.Router)();
 // Get expenses
 router.get('/', authMiddleware_1.authenticate, async (req, res) => {
@@ -31,6 +32,7 @@ router.post('/', authMiddleware_1.authenticate, async (req, res) => {
                 paidBy
             }
         });
+        fastCache_1.fastCache.invalidate('dashboard_summary');
         res.status(201).json(newExpense);
     }
     catch (error) {

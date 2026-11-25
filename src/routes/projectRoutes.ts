@@ -29,11 +29,17 @@ router.get('/', authenticate, async (req, res) => {
         const projectIds = rawProjects.map((p: any) => p._id.toString());
         const projectObjIds = projectIds.map((id: string) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
         
-        const [rawSlabs, rawQuotes, rawUsers] = await Promise.all([
+        const [rawSlabs, rawQuotes, rawUsers, rawClosures] = await Promise.all([
           db.collection('Slab').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).toArray(),
           db.collection('Quotation').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).sort({ createdAt: -1 }).toArray(),
-          db.collection('User').find({}, { projection: { name: 1 } }).toArray()
+          db.collection('User').find({}, { projection: { name: 1 } }).toArray(),
+          db.collection('ProjectClosure').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).toArray()
         ]);
+
+        const closureMap = new Map();
+        rawClosures.forEach((c: any) => {
+          closureMap.set(c.projectId?.toString(), c);
+        });
 
         const slabIds = rawSlabs.map((s: any) => s._id.toString());
         const slabObjIds = slabIds.map((id: string) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
@@ -76,6 +82,7 @@ router.get('/', authenticate, async (req, res) => {
           const pId = p._id.toString();
           const assignedName = p.assignedToId ? userMap.get(p.assignedToId) : null;
           const firstQuote = quoteMap.get(pId);
+          const closureRecord = closureMap.get(pId) || null;
           const projSlabs = slabMap.get(pId) || [];
           const { products: mergedProducts } = ensureMergedProductsForProject(
             pId,
@@ -113,6 +120,9 @@ router.get('/', authenticate, async (req, res) => {
             assignedTo: assignedName ? { name: assignedName } : null,
             clientHandle: p.clientHandle || assignedName,
             isDirectWorkOrder: p.isDirectWorkOrder || false,
+            hasChatRoom: p.hasChatRoom !== false,
+            isClosed: closureRecord?.status === 'closed' || !!closureRecord,
+            projectClosure: closureRecord,
             createdAt: p.createdAt,
             updatedAt: p.updatedAt,
             products: mergedProducts,
@@ -131,6 +141,7 @@ router.get('/', authenticate, async (req, res) => {
         orderBy: { createdAt: 'desc' },
         include: { 
           assignedTo: { select: { name: true } },
+          projectClosure: { select: { id: true, status: true } },
           quotations: { select: { id: true, products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
           slabs: {
             select: {
@@ -165,7 +176,7 @@ router.get('/', authenticate, async (req, res) => {
           if (sum > 0) calculatedTotalPieces = sum;
         }
 
-        const { quotations, ...projectData } = p;
+        const { quotations, projectClosure, ...projectData } = p;
 
         return {
           ...projectData,
@@ -174,7 +185,10 @@ router.get('/', authenticate, async (req, res) => {
           totalPieces: calculatedTotalPieces,
           completedPieces: projectData.completedPieces || 0,
           deliveryDate: projectData.deadline || projectData.deliveryDate,
-          clientHandle: projectData.clientHandle || projectData.assignedTo?.name
+          clientHandle: projectData.clientHandle || projectData.assignedTo?.name,
+          hasChatRoom: projectData.hasChatRoom !== false,
+          isClosed: projectClosure?.status === 'closed' || !!projectClosure,
+          projectClosure: projectClosure || null
         };
       });
 

@@ -1748,7 +1748,6 @@ router.get('/approved-logs', authMiddleware_1.authenticate, async (req, res) => 
             try {
                 const rawApproved = await db.collection('ProductionLog').find({ approvalStatus: 'approved' })
                     .sort({ createdAt: -1 })
-                    .limit(200)
                     .toArray();
                 const workerIds = rawApproved.map((l) => l.workerId).filter(Boolean);
                 const projectIds = rawApproved.map((l) => l.projectId).filter(Boolean);
@@ -1787,7 +1786,6 @@ router.get('/approved-logs', authMiddleware_1.authenticate, async (req, res) => 
             index_1.prisma.productionLog.findMany({
                 where: { approvalStatus: 'approved' },
                 orderBy: { createdAt: 'desc' },
-                take: 200,
                 include: {
                     worker: { select: { name: true } },
                     project: { select: { name: true, projectId: true, clientName: true } }

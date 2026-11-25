@@ -20,11 +20,16 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 const rawProjects = await db.collection('Project').find({}).sort({ createdAt: -1 }).toArray();
                 const projectIds = rawProjects.map((p) => p._id.toString());
                 const projectObjIds = projectIds.map((id) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
-                const [rawSlabs, rawQuotes, rawUsers] = await Promise.all([
+                const [rawSlabs, rawQuotes, rawUsers, rawClosures] = await Promise.all([
                     db.collection('Slab').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).toArray(),
                     db.collection('Quotation').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).sort({ createdAt: -1 }).toArray(),
-                    db.collection('User').find({}, { projection: { name: 1 } }).toArray()
+                    db.collection('User').find({}, { projection: { name: 1 } }).toArray(),
+                    db.collection('ProjectClosure').find({ $or: [{ projectId: { $in: projectIds } }, { projectId: { $in: projectObjIds } }] }).toArray()
                 ]);
+                const closureMap = new Map();
+                rawClosures.forEach((c) => {
+                    closureMap.set(c.projectId?.toString(), c);
+                });
                 const slabIds = rawSlabs.map((s) => s._id.toString());
                 const slabObjIds = slabIds.map((id) => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
                 const rawPieces = await db.collection('Piece').find({ $or: [{ slabId: { $in: slabIds } }, { slabId: { $in: slabObjIds } }] }).toArray();
@@ -63,6 +68,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                     const pId = p._id.toString();
                     const assignedName = p.assignedToId ? userMap.get(p.assignedToId) : null;
                     const firstQuote = quoteMap.get(pId);
+                    const closureRecord = closureMap.get(pId) || null;
                     const projSlabs = slabMap.get(pId) || [];
                     const { products: mergedProducts } = (0, projectSync_1.ensureMergedProductsForProject)(pId, projSlabs, firstQuote ? [{ ...firstQuote, id: firstQuote._id.toString() }] : []);
                     let calculatedTotalPieces = Number(p.totalPieces) || 0;
@@ -97,6 +103,9 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                         assignedTo: assignedName ? { name: assignedName } : null,
                         clientHandle: p.clientHandle || assignedName,
                         isDirectWorkOrder: p.isDirectWorkOrder || false,
+                        hasChatRoom: p.hasChatRoom !== false,
+                        isClosed: closureRecord?.status === 'closed' || !!closureRecord,
+                        projectClosure: closureRecord,
                         createdAt: p.createdAt,
                         updatedAt: p.updatedAt,
                         products: mergedProducts,
@@ -114,6 +123,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
             orderBy: { createdAt: 'desc' },
             include: {
                 assignedTo: { select: { name: true } },
+                projectClosure: { select: { id: true, status: true } },
                 quotations: { select: { id: true, products: true }, orderBy: { createdAt: 'desc' }, take: 1 },
                 slabs: {
                     select: {
@@ -148,7 +158,7 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 if (sum > 0)
                     calculatedTotalPieces = sum;
             }
-            const { quotations, ...projectData } = p;
+            const { quotations, projectClosure, ...projectData } = p;
             return {
                 ...projectData,
                 products: mergedProducts,
@@ -156,7 +166,10 @@ router.get('/', authMiddleware_1.authenticate, async (req, res) => {
                 totalPieces: calculatedTotalPieces,
                 completedPieces: projectData.completedPieces || 0,
                 deliveryDate: projectData.deadline || projectData.deliveryDate,
-                clientHandle: projectData.clientHandle || projectData.assignedTo?.name
+                clientHandle: projectData.clientHandle || projectData.assignedTo?.name,
+                hasChatRoom: projectData.hasChatRoom !== false,
+                isClosed: projectClosure?.status === 'closed' || !!projectClosure,
+                projectClosure: projectClosure || null
             };
         });
         fastCache_1.fastCache.set('all_projects', enrichedProjects, 60);
