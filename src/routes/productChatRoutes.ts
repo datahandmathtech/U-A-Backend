@@ -5,8 +5,8 @@ import { authenticate } from '../middleware/auth';
 import { fastCache } from '../utils/fastCache';
 import {
   ChatReadReceipt,
-  ACTIVE_CHAT_PROJECT_STATUSES,
-  isProjectCompletedForChat,
+  WORK_ORDER_CHAT_PROJECT_STATUSES,
+  classifyWorkOrderForChat,
   normalizeReadBy,
   isMessageUnreadForViewer
 } from '../utils/dashboardChatHelpers';
@@ -86,17 +86,34 @@ const resolveViewer = async (req: any, db: any): Promise<ViewerInfo> => {
   return resolved;
 };
 
-const getActiveProjectMap = async (db: any) => {
+const toProjectRoomMeta = (id: string, p: any, firstSlabId: string) => ({
+  id,
+  projectId: p.projectId || '',
+  name: p.name || 'Work Order',
+  clientName: p.clientName || p.name || 'Client Room',
+  status: p.status || 'production',
+  customerPhoto: p.customerPhoto || '',
+  firstSlabId: firstSlabId || id,
+  createdAt: p.createdAt,
+  updatedAt: p.updatedAt
+});
+
+/**
+ * Loads all Work Orders (excluding CRM enquiries and rooms with chat disabled)
+ * and classifies them cleanly into Active Work Orders vs Completed Work Orders.
+ */
+const getWorkOrderChatMaps = async (db: any) => {
   const activeMap = new Map<string, any>();
+  const completedMap = new Map<string, any>();
   const firstSlabMap = new Map<string, string>();
   const closedIds = new Set<string>();
-  const activeStatusesArray = Array.from(ACTIVE_CHAT_PROJECT_STATUSES);
+  const workOrderStatusesArray = Array.from(WORK_ORDER_CHAT_PROJECT_STATUSES);
 
   if (db) {
     const [rawProjects, rawClosures, rawSlabs, rawPieces, rawLogs] = await Promise.all([
       db.collection('Project')
         .find(
-          { status: { $in: activeStatusesArray }, hasChatRoom: { $ne: false } },
+          { status: { $in: workOrderStatusesArray }, hasChatRoom: { $ne: false } },
           {
             projection: {
               projectId: 1,
@@ -155,27 +172,22 @@ const getActiveProjectMap = async (db: any) => {
     for (const p of rawProjects) {
       const pId = p._id.toString();
       const projSlabs = slabsByProject.get(pId) || [];
-      if (isProjectCompletedForChat(p, closedIds, projSlabs, piecesBySlab, logsByPiece)) {
-        continue;
+      const classification = classifyWorkOrderForChat(p, closedIds, projSlabs, piecesBySlab, logsByPiece);
+      if (classification === 'excluded') continue;
+
+      const meta = toProjectRoomMeta(pId, p, firstSlabMap.get(pId) || pId);
+      if (classification === 'completed') {
+        completedMap.set(pId, meta);
+      } else {
+        activeMap.set(pId, meta);
       }
-      activeMap.set(pId, {
-        id: pId,
-        projectId: p.projectId || '',
-        name: p.name || 'Work Order',
-        clientName: p.clientName || p.name || 'Client Room',
-        status: p.status || 'production',
-        customerPhoto: p.customerPhoto || '',
-        firstSlabId: firstSlabMap.get(pId) || pId,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt
-      });
     }
-    return activeMap;
+    return { activeMap, completedMap };
   }
 
   const projects = await prisma.project.findMany({
     where: {
-      status: { in: activeStatusesArray }
+      status: { in: workOrderStatusesArray }
     },
     select: {
       id: true,
@@ -217,19 +229,21 @@ const getActiveProjectMap = async (db: any) => {
     if (p.projectClosure && (!p.projectClosure.status || p.projectClosure.status === 'closed')) {
       closedIds.add(p.id);
     }
-    if (isProjectCompletedForChat(p, closedIds, p.slabs || [])) continue;
-    activeMap.set(p.id, {
-      id: p.id,
-      projectId: p.projectId || '',
-      name: p.name || 'Work Order',
-      clientName: p.clientName || p.name || 'Client Room',
-      status: p.status || 'production',
-      customerPhoto: p.customerPhoto || '',
-      firstSlabId: p.slabs?.[0]?.id || p.id,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt
-    });
+    const classification = classifyWorkOrderForChat(p, closedIds, p.slabs || []);
+    if (classification === 'excluded') continue;
+
+    const meta = toProjectRoomMeta(p.id, p, p.slabs?.[0]?.id || p.id);
+    if (classification === 'completed') {
+      completedMap.set(p.id, meta);
+    } else {
+      activeMap.set(p.id, meta);
+    }
   }
+  return { activeMap, completedMap };
+};
+
+const getActiveProjectMap = async (db: any) => {
+  const { activeMap } = await getWorkOrderChatMaps(db);
   return activeMap;
 };
 
@@ -274,21 +288,23 @@ const resolveProjectContext = async (slabOrProjectId: string, providedProjectId:
   return { targetProjectId, targetSlabId };
 };
 
-// GET all active chat rooms with latest message preview and per-user unread count (completed orders excluded)
+// GET active Work Order chat rooms AND permanently saved Completed Work Order chat rooms
 router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
   try {
     const db = mongoose.connection?.db;
     const viewer = await resolveViewer(req, db);
-    const activeProjectMap = await getActiveProjectMap(db);
-    const activeProjectIds = Array.from(activeProjectMap.keys());
+    const { activeMap, completedMap } = await getWorkOrderChatMaps(db);
+    const activeProjectIds = Array.from(activeMap.keys());
+    const completedProjectIds = Array.from(completedMap.keys());
+    const allProjectIds = [...activeProjectIds, ...completedProjectIds];
 
-    if (activeProjectIds.length === 0) {
-      return res.json({ totalUnread: 0, roomsCount: 0, rooms: [] });
+    if (allProjectIds.length === 0) {
+      return res.json({ totalUnread: 0, roomsCount: 0, completedCount: 0, rooms: [], completedRooms: [] });
     }
 
     let messages: any[] = [];
     if (db) {
-      const candidateIds = activeProjectIds.flatMap((id) => toIdCandidates(id));
+      const candidateIds = allProjectIds.flatMap((id) => toIdCandidates(id));
       const rawMsgs = await db.collection('ProductMessage')
         .find({ projectId: { $in: candidateIds } })
         .sort({ createdAt: 1 })
@@ -296,7 +312,7 @@ router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
       messages = rawMsgs.map(normalizeMessage);
     } else {
       const rawMsgs = await prisma.productMessage.findMany({
-        where: { projectId: { in: activeProjectIds } },
+        where: { projectId: { in: allProjectIds } },
         orderBy: { createdAt: 'asc' }
       });
       messages = rawMsgs.map(normalizeMessage);
@@ -307,7 +323,9 @@ router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
 
     for (const msg of messages) {
       const pId = msg.projectId;
-      if (!activeProjectMap.has(pId)) continue;
+      const isActive = activeMap.has(pId);
+      const isCompleted = completedMap.has(pId);
+      if (!isActive && !isCompleted) continue;
 
       let entry = statsMap.get(pId);
       if (!entry) {
@@ -316,14 +334,14 @@ router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
       }
       entry.totalMessages += 1;
       entry.lastMsg = msg;
-      if (isMessageUnreadForViewer(msg, viewer.userId, viewer.userRole)) {
+      // Only active Work Orders contribute to live unread notifications; completed orders keep saved history with 0 unread badge
+      if (isActive && isMessageUnreadForViewer(msg, viewer.userId, viewer.userRole)) {
         entry.unreadCount += 1;
         totalUnread += 1;
       }
     }
 
-    const rooms = activeProjectIds.map((pId) => {
-      const proj = activeProjectMap.get(pId);
+    const buildRoomDto = (pId: string, proj: any, isCompleted: boolean) => {
       const stats = statsMap.get(pId);
       const lastMsg = stats?.lastMsg || null;
       const previewText = lastMsg
@@ -337,6 +355,7 @@ router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
         projectName: proj.name,
         clientName: proj.clientName,
         status: proj.status,
+        isCompleted,
         customerPhoto: proj.customerPhoto,
         lastMessage: previewText,
         lastMessageTime: lastMsg?.createdAt || null,
@@ -348,25 +367,34 @@ router.get('/rooms/summary', authenticate, async (req: any, res: any) => {
         lastMessageIsReadByAdmin: lastMsg?.isReadByAdmin || false,
         hasAttachments: Boolean(lastMsg?.attachments?.length),
         totalMessages: stats?.totalMessages || 0,
-        unreadCount: stats?.unreadCount || 0
+        unreadCount: isCompleted ? 0 : (stats?.unreadCount || 0)
       };
-    });
+    };
 
-    // Unread rooms surface first, then sort by latest activity descending (WhatsApp style)
-    rooms.sort((a, b) => {
-      if ((b.unreadCount > 0 ? 1 : 0) !== (a.unreadCount > 0 ? 1 : 0)) {
-        return (b.unreadCount > 0 ? 1 : 0) - (a.unreadCount > 0 ? 1 : 0);
-      }
-      if (Boolean(b.lastMessageTime) !== Boolean(a.lastMessageTime)) {
-        return b.lastMessageTime ? 1 : -1;
-      }
-      return b.lastMessageSortTime - a.lastMessageSortTime;
-    });
+    const sortRooms = (list: any[]) =>
+      list.sort((a, b) => {
+        if ((b.unreadCount > 0 ? 1 : 0) !== (a.unreadCount > 0 ? 1 : 0)) {
+          return (b.unreadCount > 0 ? 1 : 0) - (a.unreadCount > 0 ? 1 : 0);
+        }
+        if (Boolean(b.lastMessageTime) !== Boolean(a.lastMessageTime)) {
+          return b.lastMessageTime ? 1 : -1;
+        }
+        return b.lastMessageSortTime - a.lastMessageSortTime;
+      });
+
+    const rooms = sortRooms(
+      activeProjectIds.map((pId) => buildRoomDto(pId, activeMap.get(pId), false))
+    );
+    const completedRooms = sortRooms(
+      completedProjectIds.map((pId) => buildRoomDto(pId, completedMap.get(pId), true))
+    );
 
     res.json({
       totalUnread,
       roomsCount: rooms.length,
-      rooms
+      completedCount: completedRooms.length,
+      rooms,
+      completedRooms
     });
   } catch (error: any) {
     console.error('Error fetching chat rooms summary:', error);

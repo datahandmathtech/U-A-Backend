@@ -1,12 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.computeDashboardDateRanges = exports.isMessageUnreadForViewer = exports.normalizeReadBy = exports.isProjectCompletedForChat = exports.isWorkOrder100PercentDone = exports.ACTIVE_CHAT_PROJECT_STATUSES = void 0;
+exports.computeDashboardDateRanges = exports.isMessageUnreadForViewer = exports.normalizeReadBy = exports.isProjectCompletedForChat = exports.classifyWorkOrderForChat = exports.isWorkOrder100PercentDone = exports.ACTIVE_CHAT_PROJECT_STATUSES = exports.WORK_ORDER_CHAT_PROJECT_STATUSES = void 0;
+exports.WORK_ORDER_CHAT_PROJECT_STATUSES = new Set([
+    'shop_drawing',
+    'material_planning',
+    'production',
+    'work_order',
+    'completed'
+]);
 exports.ACTIVE_CHAT_PROJECT_STATUSES = new Set([
-    'pending',
-    'enquiry',
-    'design_sharing',
-    'quotation',
-    'advance_payment',
     'shop_drawing',
     'material_planning',
     'production',
@@ -102,18 +104,28 @@ const isWorkOrder100PercentDone = (project, closedIds = new Set(), slabs = [], p
 };
 exports.isWorkOrder100PercentDone = isWorkOrder100PercentDone;
 /**
+ * Classifies a project for Unnati Chat:
+ * - 'excluded': CRM enquiries, cancelled/archived entries, or rooms with chat disabled
+ * - 'completed': Work Orders that are completed, closed, or 100% done across pieces
+ * - 'active': Live Work Orders currently open in the production workflow
+ */
+const classifyWorkOrderForChat = (project, closedIds = new Set(), slabs = [], piecesBySlab = new Map(), logsByPiece = new Map()) => {
+    if (!project || project.hasChatRoom === false)
+        return 'excluded';
+    const status = String(project.status || '').trim().toLowerCase();
+    if (!exports.WORK_ORDER_CHAT_PROJECT_STATUSES.has(status))
+        return 'excluded';
+    return (0, exports.isWorkOrder100PercentDone)(project, closedIds, slabs, piecesBySlab, logsByPiece)
+        ? 'completed'
+        : 'active';
+};
+exports.classifyWorkOrderForChat = classifyWorkOrderForChat;
+/**
  * Computes whether a project should be excluded from active Chat Rooms / unread notifications
- * because it is completed, closed, cancelled/pending, disabled, or 100% finished across its slabs/pieces.
+ * because it is not an active Work Order (completed, closed, CRM enquiry, disabled, or 100% finished).
  */
 const isProjectCompletedForChat = (project, closedIds, slabs = [], piecesBySlab = new Map(), logsByPiece = new Map()) => {
-    if (!project)
-        return true;
-    if (project.hasChatRoom === false)
-        return true;
-    const status = String(project.status || '').trim().toLowerCase();
-    if (!exports.ACTIVE_CHAT_PROJECT_STATUSES.has(status))
-        return true;
-    return (0, exports.isWorkOrder100PercentDone)(project, closedIds, slabs, piecesBySlab, logsByPiece);
+    return (0, exports.classifyWorkOrderForChat)(project, closedIds, slabs, piecesBySlab, logsByPiece) !== 'active';
 };
 exports.isProjectCompletedForChat = isProjectCompletedForChat;
 const normalizeReadBy = (rawReadBy) => {

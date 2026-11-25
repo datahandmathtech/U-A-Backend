@@ -12,12 +12,15 @@ export interface DashboardDateRanges {
   monthRangeEnd: Date | null;
 }
 
+export const WORK_ORDER_CHAT_PROJECT_STATUSES = new Set([
+  'shop_drawing',
+  'material_planning',
+  'production',
+  'work_order',
+  'completed'
+]);
+
 export const ACTIVE_CHAT_PROJECT_STATUSES = new Set([
-  'pending',
-  'enquiry',
-  'design_sharing',
-  'quotation',
-  'advance_payment',
   'shop_drawing',
   'material_planning',
   'production',
@@ -136,9 +139,34 @@ export const isWorkOrder100PercentDone = (
   return overallProgressPercent >= 100;
 };
 
+export type WorkOrderChatState = 'excluded' | 'active' | 'completed';
+
+/**
+ * Classifies a project for Unnati Chat:
+ * - 'excluded': CRM enquiries, cancelled/archived entries, or rooms with chat disabled
+ * - 'completed': Work Orders that are completed, closed, or 100% done across pieces
+ * - 'active': Live Work Orders currently open in the production workflow
+ */
+export const classifyWorkOrderForChat = (
+  project: any,
+  closedIds: Set<string> = new Set(),
+  slabs: any[] = [],
+  piecesBySlab: Map<string, any[]> = new Map(),
+  logsByPiece: Map<string, any[]> = new Map()
+): WorkOrderChatState => {
+  if (!project || project.hasChatRoom === false) return 'excluded';
+
+  const status = String(project.status || '').trim().toLowerCase();
+  if (!WORK_ORDER_CHAT_PROJECT_STATUSES.has(status)) return 'excluded';
+
+  return isWorkOrder100PercentDone(project, closedIds, slabs, piecesBySlab, logsByPiece)
+    ? 'completed'
+    : 'active';
+};
+
 /**
  * Computes whether a project should be excluded from active Chat Rooms / unread notifications
- * because it is completed, closed, cancelled/pending, disabled, or 100% finished across its slabs/pieces.
+ * because it is not an active Work Order (completed, closed, CRM enquiry, disabled, or 100% finished).
  */
 export const isProjectCompletedForChat = (
   project: any,
@@ -147,13 +175,7 @@ export const isProjectCompletedForChat = (
   piecesBySlab: Map<string, any[]> = new Map(),
   logsByPiece: Map<string, any[]> = new Map()
 ): boolean => {
-  if (!project) return true;
-  if (project.hasChatRoom === false) return true;
-
-  const status = String(project.status || '').trim().toLowerCase();
-  if (!ACTIVE_CHAT_PROJECT_STATUSES.has(status)) return true;
-
-  return isWorkOrder100PercentDone(project, closedIds, slabs, piecesBySlab, logsByPiece);
+  return classifyWorkOrderForChat(project, closedIds, slabs, piecesBySlab, logsByPiece) !== 'active';
 };
 
 export const normalizeReadBy = (rawReadBy: any): ChatReadReceipt[] => {
